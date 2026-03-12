@@ -87,7 +87,7 @@ def get_document_content(document_url: str) -> dict:
                             text_runs.append(shape.text)
                 text_content = "\n".join(text_runs)
             
-            # Extraction Word (.docx uniquement, les Docs sont gérés en Cas 1)
+            # Extraction Word 
             elif "wordprocessingml" in mime_type or file_name.endswith(".docx"):
                 doc = Document(file_stream)
                 full_text = [para.text for para in doc.paragraphs if para.text]
@@ -102,7 +102,6 @@ def get_document_content(document_url: str) -> dict:
                 # On ne prend que la première feuille pour éviter de saturer l'agent
                 df = pd.read_excel(file_stream, sheet_name=0)
                 
-                # Conversion en format texte (CSV ou Tabulaire)
                 text_content = df.to_csv(index=False)
             
             else:

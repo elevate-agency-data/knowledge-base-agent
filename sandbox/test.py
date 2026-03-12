@@ -79,6 +79,13 @@ rag_model = GenerativeModel(
 response = rag_model.generate_content("Quelle est la roadmap de Backmarket ? Donne les liens des fichiers où tu as trouvé les infos.")
 print(response.text)
 
+chunk = response.candidates[0].grounding_metadata.grounding_chunks[0]
+
+if response.candidates[0].grounding_metadata:
+    for chunk in response.candidates[0].grounding_metadata.grounding_chunks:
+        # Affiche toutes les métadonnées disponibles pour comprendre les clés
+        print(f"DEBUG METADATA: {chunk.retrieved_context.metadata}")
+
 if response.candidates[0].grounding_metadata:
             metadata = response.candidates[0].grounding_metadata
             # Extraction des URIs uniques pour ne pas polluer l'agent
@@ -115,14 +122,6 @@ response = rag_model.generate_content("Donne moi le lien du fichier le plus réc
 print(response.text)
 
 
-
-
-folder_query = f"name = 'BACKMARKET' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-folder_results = drive_service.files().list(q=folder_query, fields="files(id, name)").execute()
-folders = folder_results.get('files', [])
-
-
-
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
@@ -136,8 +135,11 @@ creds = service_account.Credentials.from_service_account_file(
 )
 drive_service = build('drive', 'v3', credentials=creds)
 
+file_id = '1DujBsU1kC-Oye4M1tDTBsITpYeBHxsJE'
+
 # folder_names=["Appel d'offre", "Livrables"]
 folder_names=["BACKMARKET"]
+name="AIR LIQUIDE"
 all_paths = []
 not_found = []
 
@@ -152,7 +154,7 @@ for name in folder_names:
         supportsAllDrives=True,
         includeItemsFromAllDrives=True
     ).execute()
-    
+
     folders = response.get('files', [])
     if folders:
         folder_id=folders[0]['id']

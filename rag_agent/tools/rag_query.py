@@ -11,7 +11,8 @@ from vertexai import rag
 from ..config import (
     DEFAULT_DISTANCE_THRESHOLD,
     DEFAULT_TOP_K,
-    MODEL
+    MODEL,
+    DATE_SEUIL_QUERY
 )
 from .utils import check_corpus_exists, get_corpus_resource_name
 
@@ -56,7 +57,8 @@ def rag_query(
             ],
         rag_retrieval_config= rag.RagRetrievalConfig(
                     top_k=DEFAULT_TOP_K,
-                    filter=rag.utils.resources.Filter(vector_distance_threshold=DEFAULT_DISTANCE_THRESHOLD),
+                    filter=rag.utils.resources.Filter(
+                        vector_distance_threshold=DEFAULT_DISTANCE_THRESHOLD)
                 )
         )
 

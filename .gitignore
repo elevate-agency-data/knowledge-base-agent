@@ -1,2 +1,34 @@
-rag_agent/key.json
+# === Secrets & credentials ===
+*.env
+.env
+**/.env
+**/key.json
+**/*_key.json
+**/*-key.json
+**/service_account*.json
+
+# === Python cache ===
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# === Virtual environments ===
 .venv/
+rag_venv/
+venv/
+env/
+
+# === DuckDB databases ===
+*.duckdb
+*.duckdb.wal
+
+# === ADK local session databases ===
+**/.adk/session.db
+
+# === Streamlit UI local data ===
+ui/data/
+
+# === Hybrid RAG local data ===
+hybrid/data/benchmark_results.json

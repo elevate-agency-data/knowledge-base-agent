@@ -1,0 +1,23 @@
+# rag_agent/ — pipeline Vertex AI RAG existant
+PyPDF2
+python-docx
+python-pptx
+pandas
+google-api-python-client
+google-auth
+google-cloud-aiplatform
+google-adk
+
+# hybrid/ — pipeline RAG custom
+duckdb
+sentence-transformers
+FlagEmbedding
+pymupdf
+langdetect
+langchain-text-splitters
+numpy
+asyncpg
+scikit-learn
+
+# ui/ — Streamlit interface
+streamlit>=1.35

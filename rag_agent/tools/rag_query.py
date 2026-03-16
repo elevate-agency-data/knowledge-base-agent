@@ -14,12 +14,14 @@ from ..config import (
     MODEL
 )
 from .utils import check_corpus_exists, get_corpus_resource_name
+from shared.query_rewriter import rewrite_query
 
 
 def rag_query(
     corpus_name: str,
     query: str,
     tool_context: ToolContext,
+    context: str = "",
 ) -> dict:
     """
     Query a Vertex AI RAG corpus with a user question and return relevant information.
@@ -60,17 +62,20 @@ def rag_query(
                 )
         )
 
+        # Rewrite query for better retrieval recall
+        retrieval_query = rewrite_query(query, context=context)
+
         # Perform the query
-        print("Performing retrieval query...")
+        print(f"Performing retrieval query... (rewritten: '{retrieval_query}')")
         rag_retrieval_tool = Tool.from_retrieval(
             retrieval=rag.Retrieval(source=rag_store)
         )
-        
+
         rag_model = GenerativeModel(
         model_name=MODEL, tools=[rag_retrieval_tool]
         )
 
-        response = rag_model.generate_content(query)
+        response = rag_model.generate_content(retrieval_query)
 
         # Process the response into a more usable format
         results = []
@@ -119,6 +124,7 @@ def rag_query(
             "status": "success",
             "message": f"Successfully queried corpus '{corpus_name}'",
             "query": query,
+            "retrieval_query": retrieval_query,
             "corpus_name": corpus_name,
             "results": final_results,
         }

@@ -101,7 +101,7 @@ DEFAULT_EMBEDDING_MODEL = "publishers/google/models/text-embedding-005"
 ### 4. Paramètres Hybrid RAG (`hybrid/config.py`)
 
 ```python
-ENV                     = "local"          # "local" → DuckDB | "gcp" → AlloyDB
+ENV                     = "local"          # "local" → DuckDB | "gcp" → AlloyDB pour prod 
 DUCKDB_PATH             = "hybrid/data/hybrid.duckdb"
 DEFAULT_EMBEDDING_MODEL = "mpnet-768"
 CHUNK_SIZE              = 512
@@ -157,11 +157,11 @@ Corpus hébergés dans Google Cloud. Ingestion et retrieval gérés par l'API Ve
 
 ### Pipeline 2 — Hybrid RAG
 
-Index locaux par client, stockés dans DuckDB. Recherche dense + sparse fusionnée par RRF.
+Index locaux par dossier, stockés dans DuckDB. Recherche dense + sparse fusionnée par RRF.
 
 | Outil ADK | Description |
 |---|---|
-| `hybrid_create_index` | Crée un index pour un client (ex: "celio") |
+| `hybrid_create_index` | Crée un index pour un dossier (ex: "celio") |
 | `hybrid_add_data` | Ingère des dossiers Drive dans un index |
 | `hybrid_query` | Interroge un ou plusieurs index (routing auto single/multi) |
 | `hybrid_find_similar` | Trouve les documents similaires à un lien Drive (vecteur à vecteur) |
@@ -170,7 +170,7 @@ Index locaux par client, stockés dans DuckDB. Recherche dense + sparse fusionn�
 | `hybrid_delete_index` | Supprime un index (confirmation requise) |
 | `hybrid_list_drive` | Liste le contenu d'un dossier Drive |
 
-**Points forts :** Isolation par client, warm start rapide (~7s), recherche multi-index, similarité documentaire.
+**Points forts :** Isolation par dossier, warm start rapide (~7s), recherche multi-index, similarité documentaire.
 
 **Limites :** Ressources locales (RAM selon le modèle d'embedding), pas de partage cloud natif.
 

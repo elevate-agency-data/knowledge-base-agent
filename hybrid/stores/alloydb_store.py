@@ -224,6 +224,15 @@ class AlloyDBStore(BaseStore):
             rows = await conn.fetch(sql, *all_params)
             return [dict(row) for row in rows]
 
+    async def _async_delete_chunks_by_file_name(self, file_name: str, index_name: str) -> None:
+        """Async implementation of delete_chunks_by_file_name()."""
+        async with self._acquire() as conn:
+            await conn.execute(
+                "DELETE FROM chunks WHERE file_name = $1 AND index_name = $2",
+                file_name,
+                index_name,
+            )
+
     async def _async_delete_index(self, index_name: str) -> None:
         """Async implementation of delete_index()."""
         async with self._acquire() as conn:
@@ -370,6 +379,16 @@ class AlloyDBStore(BaseStore):
             List of chunk dicts with ``"score"`` key.
         """
         return self._run(self._async_sparse_search(query, top_k, filters or {}))
+
+    def delete_chunks_by_file_name(self, file_name: str, index_name: str) -> None:
+        """
+        Delete all chunks for *file_name* within *index_name*.
+
+        Args:
+            file_name:  Exact file_name stored in the chunks table.
+            index_name: Index to scope the deletion to.
+        """
+        self._run(self._async_delete_chunks_by_file_name(file_name, index_name))
 
     def delete_index(self, index_name: str) -> None:
         """

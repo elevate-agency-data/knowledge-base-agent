@@ -81,6 +81,19 @@ class BaseStore(ABC):
         """
 
     @abstractmethod
+    def delete_chunks_by_file_name(self, file_name: str, index_name: str) -> None:
+        """
+        Remove all chunks for a given file_name within *index_name*.
+
+        Used when a file has been updated: old chunks are purged before
+        re-ingesting the fresh version.
+
+        Args:
+            file_name:  Exact file_name value stored in the chunks table.
+            index_name: Index to scope the deletion to.
+        """
+
+    @abstractmethod
     def delete_index(self, index_name: str) -> None:
         """
         Remove all chunks belonging to *index_name*.

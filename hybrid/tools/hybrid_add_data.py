@@ -4,12 +4,14 @@ ADK tool: hybrid_add_data
 Ingests Google Drive folders into a hybrid index:
   1. Connects to Drive via service-account credentials.
   2. Lists all supported files in each named folder.
-  3. Skips files already indexed (deduplication by source_url — safe to re-run).
-  4. Extracts text content from each file.
-  5. Chunks the text with the configured strategy.
-  6. Detects metadata (language, domain, tags).
-  7. Embeds each chunk in batches.
-  8. Inserts everything into the store.
+  3. Skips files already indexed (deduplication by file_name + updated_at — safe to re-run).
+  4. If a file with the same name exists but with a newer updated_at, deletes the stale
+     chunks and re-ingests the updated version.
+  5. Extracts text content from each file.
+  6. Chunks the text with the configured strategy.
+  7. Detects metadata (language, domain, tags).
+  8. Embeds each chunk in batches.
+  9. Inserts everything into the store.
 
 For large Drive folders use max_files to process in multiple passes:
   Pass 1 → hybrid_add_data(..., max_files=20)
@@ -50,9 +52,11 @@ def hybrid_add_data(
     skips files already present in the index, extracts text, chunks it,
     and stores the embedded chunks in the configured store backend.
 
-    **Resumable** — already-indexed files are detected by ``source_url`` and
-    skipped, so the tool can be called repeatedly on the same folder without
-    creating duplicate chunks.
+    **Resumable** — already-indexed files are detected by ``file_name`` +
+    ``updated_at`` and skipped, so the tool can be called repeatedly on the
+    same folder without creating duplicate chunks.  If a file has been updated
+    in Drive (same name, newer ``updated_at``), the stale chunks are deleted
+    and the file is re-ingested cleanly.
 
     **For large folders** use ``max_files`` to process in batches and avoid
     ADK request timeouts::
@@ -77,7 +81,8 @@ def hybrid_add_data(
         - ``message``           : Human-readable summary
         - ``index_name``        : Echo of the target index
         - ``files_processed``   : Files ingested in this call
-        - ``files_already_indexed``: Files skipped (already in index)
+        - ``files_already_indexed``: Files skipped (already in index, unchanged)
+        - ``files_updated``     : Files whose stale chunks were replaced
         - ``files_remaining``   : Estimated files still to process (if max_files set)
         - ``chunks_created``    : Total chunks inserted in this call
         - ``files_skipped``     : Files that failed with error reasons
@@ -117,10 +122,11 @@ def hybrid_add_data(
             "message": f"Failed to load embedding model '{embedding_model}': {exc}",
         }
 
-    # -- Open store + load already-indexed URLs ------------------------------
+    # -- Open store + load already-indexed file state ------------------------
     store = get_store()
-    already_indexed_urls  = _get_indexed_urls(store, index_name)
-    already_indexed_names = _get_indexed_file_names(store, index_name)
+    already_indexed_urls       = _get_indexed_urls(store, index_name)
+    # maps file_name → updated_at (YYYY-MM-DD) for all chunks in the index
+    indexed_file_dates         = _get_indexed_file_names_with_dates(store, index_name)
 
     # -- Chunk strategy parameters -------------------------------------------
     chunk_params: dict = {}
@@ -137,6 +143,7 @@ def hybrid_add_data(
     # -- Process folders -----------------------------------------------------
     files_processed        = 0
     files_already_indexed  = 0
+    files_updated          = 0
     chunks_created         = 0
     files_remaining        = 0
     files_skipped: list[dict] = []
@@ -155,12 +162,31 @@ def hybrid_add_data(
         for file_info in file_infos:
             url = file_info.get("source_url", "")
             file_name = file_info.get("file_name", "")
+            # Parse to YYYY-MM-DD — same format stored in the DB
+            file_updated_at = _parse_date_str(file_info.get("updated_at", ""))
 
-            # -- Skip already indexed files (by URL or file name) ------------
-            if (url and url in already_indexed_urls) or \
-               (file_name and file_name in already_indexed_names):
+            # -- Deduplication logic -----------------------------------------
+            # 1. URL already indexed → same exact file, skip unconditionally
+            if url and url in already_indexed_urls:
                 files_already_indexed += 1
                 continue
+
+            # 2. Same file_name already indexed
+            if file_name and file_name in indexed_file_dates:
+                stored_date = indexed_file_dates[file_name]
+                if stored_date == file_updated_at:
+                    # Same version — nothing to do
+                    files_already_indexed += 1
+                    continue
+                # Different updated_at → file was modified in Drive:
+                # purge stale chunks so we ingest a clean version
+                store.delete_chunks_by_file_name(file_name, index_name)
+                files_updated += 1
+                # Remove from local cache so URL check stays coherent
+                already_indexed_urls = {
+                    u for u in already_indexed_urls
+                    if u != url
+                }
 
             # -- Respect max_files limit -------------------------------------
             if max_files and files_processed >= max_files:
@@ -231,12 +257,14 @@ def hybrid_add_data(
             f"Ingestion {'complete' if done else 'partial'}. "
             f"{files_processed} file(s) processed, "
             f"{chunks_created} chunk(s) created into index '{index_name}'. "
-            f"{files_already_indexed} file(s) already indexed (skipped)."
+            f"{files_already_indexed} file(s) already indexed (skipped). "
+            f"{files_updated} file(s) updated (stale chunks replaced)."
             f"{resume_hint}"
         ),
         "index_name":           index_name,
         "files_processed":      files_processed,
         "files_already_indexed": files_already_indexed,
+        "files_updated":        files_updated,
         "files_remaining":      files_remaining,
         "chunks_created":       chunks_created,
         "files_skipped":        files_skipped,
@@ -277,29 +305,51 @@ def _get_indexed_urls(store, index_name: str) -> set[str]:
     return set()
 
 
-def _get_indexed_file_names(store, index_name: str) -> set[str]:
+def _get_indexed_file_names_with_dates(store, index_name: str) -> dict[str, str]:
     """
-    Return the set of file_names already present in the index.
+    Return a mapping of file_name → updated_at (YYYY-MM-DD) for all files
+    already present in the index.
+
+    When the same file_name appears in multiple chunks, the most recent
+    updated_at is used (so a partially-ingested update doesn't get skipped).
 
     Args:
         store:      Store instance (DuckDBStore or AlloyDBStore).
         index_name: Index to check.
 
     Returns:
-        Set of file_name strings already indexed.
+        Dict mapping file_name → updated_at string (YYYY-MM-DD or empty).
     """
     try:
         from hybrid.stores.duckdb_store import DuckDBStore
         if isinstance(store, DuckDBStore):
             conn = store._get_conn()
             rows = conn.execute(
-                "SELECT DISTINCT file_name FROM chunks WHERE index_name = ?",
+                """
+                SELECT file_name, MAX(CAST(updated_at AS VARCHAR))
+                FROM chunks
+                WHERE index_name = ?
+                GROUP BY file_name
+                """,
                 [index_name],
             ).fetchall()
-            return {row[0] for row in rows if row[0]}
+            return {row[0]: (row[1] or "") for row in rows if row[0]}
     except Exception:
         pass
-    return set()
+    return {}
+
+
+def _parse_date_str(dt_str: str) -> str:
+    """
+    Extract the YYYY-MM-DD prefix from an ISO 8601 datetime string.
+
+    Returns an empty string if parsing fails.
+    """
+    import re
+    if not dt_str:
+        return ""
+    match = re.match(r"(\d{4}-\d{2}-\d{2})", dt_str)
+    return match.group(1) if match else ""
 
 
 def _embed_in_batches(

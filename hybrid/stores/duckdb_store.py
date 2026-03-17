@@ -315,6 +315,24 @@ class DuckDBStore(BaseStore):
             rows = conn.execute(sql, fallback_params).fetchall()
             return self._rows_to_dicts(rows, conn)
 
+    def delete_chunks_by_file_name(self, file_name: str, index_name: str) -> None:
+        """
+        Delete all chunks for *file_name* within *index_name*.
+
+        Called when a file has been updated so stale chunks are purged
+        before re-ingestion.
+
+        Args:
+            file_name:  Exact file_name stored in the chunks table.
+            index_name: Index to scope the deletion to.
+        """
+        conn = self._get_conn()
+        conn.execute(
+            "DELETE FROM chunks WHERE file_name = ? AND index_name = ?",
+            [file_name, index_name],
+        )
+        self._rebuild_fts()
+
     def delete_index(self, index_name: str) -> None:
         """
         Delete all chunks associated with *index_name*.

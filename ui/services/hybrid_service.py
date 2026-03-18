@@ -121,6 +121,8 @@ def multi_query(index_names: list[str], query_text: str,
         context=context,
     )
     result["elapsed_s"] = round(time.perf_counter() - t0, 2)
+    # Alias "context" → "answer" pour cohérence avec query() et vertex_service
+    result["answer"] = result.get("context", "")
     return result
 
 

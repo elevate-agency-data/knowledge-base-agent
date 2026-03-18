@@ -316,12 +316,16 @@ if user_input:
                     else f"{len(target_indexes)} index"
                 )
 
+                retrieval_query = retrieval.get("retrieval_query", "")
                 with st.chat_message("assistant"):
                     st.markdown(answer)
                     if sources:
                         with st.expander(f"Sources ({len(sources)})", expanded=False):
                             render_sources(sources, pipeline="hybrid")
-                    st.caption(f"{elapsed}s · {index_label}")
+                    caption = f"{elapsed}s · {index_label}"
+                    if retrieval_query and retrieval_query != user_input:
+                        caption += f" · query : _{retrieval_query}_"
+                    st.caption(caption)
 
                 st.session_state.sc_messages.append({
                     "role":      "assistant",

@@ -28,10 +28,20 @@ from typing import Any
 #   author     : str  — Owner display name (best-effort)
 
 _MIME_TO_TYPE: dict[str, str] = {
+    # Google native formats
     "application/vnd.google-apps.document":     "Doc",
     "application/vnd.google-apps.spreadsheet":  "Sheet",
     "application/vnd.google-apps.presentation": "Slide",
+    # PDF
     "application/pdf":                          "PDF",
+    # Office Open XML (uploaded natively, not converted to Google format)
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document":   "Docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":         "Xlsx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "Pptx",
+    # Legacy Office formats
+    "application/msword":       "Docx",
+    "application/vnd.ms-excel": "Xlsx",
+    "application/vnd.ms-powerpoint": "Pptx",
 }
 
 _MIME_TO_EXPORT: dict[str, str] = {
@@ -135,6 +145,90 @@ def extract_from_google_slide(file_id: str, drive_service: Any) -> str:
     return str(data)
 
 
+def extract_from_docx(file_id: str, drive_service: Any) -> str:
+    """
+    Download and extract text from a .docx (or legacy .doc) file.
+
+    Args:
+        file_id:       Google Drive file ID.
+        drive_service: Authenticated Google Drive API service object.
+
+    Returns:
+        Plain text — one paragraph per line, tables included.
+    """
+    import docx
+
+    request = drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
+    buf = io.BytesIO(request.execute())
+    doc = docx.Document(buf)
+    lines: list[str] = []
+    for para in doc.paragraphs:
+        if para.text.strip():
+            lines.append(para.text)
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [c.text.strip() for c in row.cells if c.text.strip()]
+            if cells:
+                lines.append("\t".join(cells))
+    return "\n\n".join(lines)
+
+
+def extract_from_xlsx(file_id: str, drive_service: Any) -> str:
+    """
+    Download and extract text from a .xlsx (or legacy .xls) file.
+
+    Each sheet is exported as tab-separated rows.
+
+    Args:
+        file_id:       Google Drive file ID.
+        drive_service: Authenticated Google Drive API service object.
+
+    Returns:
+        Plain text with one row per line, sheets separated by headers.
+    """
+    import openpyxl
+
+    request = drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
+    buf = io.BytesIO(request.execute())
+    wb = openpyxl.load_workbook(buf, read_only=True, data_only=True)
+    lines: list[str] = []
+    for sheet in wb.worksheets:
+        lines.append(f"=== {sheet.title} ===")
+        for row in sheet.iter_rows(values_only=True):
+            cells = [str(c) for c in row if c is not None and str(c).strip()]
+            if cells:
+                lines.append("\t".join(cells))
+    wb.close()
+    return "\n".join(lines)
+
+
+def extract_from_pptx(file_id: str, drive_service: Any) -> str:
+    """
+    Download and extract text from a .pptx (or legacy .ppt) file.
+
+    Args:
+        file_id:       Google Drive file ID.
+        drive_service: Authenticated Google Drive API service object.
+
+    Returns:
+        Plain text — one block per slide.
+    """
+    from pptx import Presentation
+
+    request = drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
+    buf = io.BytesIO(request.execute())
+    prs = Presentation(buf)
+    blocks: list[str] = []
+    for i, slide in enumerate(prs.slides, 1):
+        texts = []
+        for shape in slide.shapes:
+            if hasattr(shape, "text") and shape.text.strip():
+                texts.append(shape.text.strip())
+        if texts:
+            blocks.append(f"=== Slide {i} ===\n" + "\n".join(texts))
+    return "\n\n".join(blocks)
+
+
 def extract_from_url(url: str, drive_service: Any) -> str:
     """
     Auto-extract text from a Google Drive file URL.
@@ -176,30 +270,30 @@ def extract_from_url(url: str, drive_service: Any) -> str:
     elif mime == "application/vnd.google-apps.presentation":
         return extract_from_google_slide(file_id, drive_service)
     elif mime == "application/pdf":
-        # Download and extract in-memory
-        request = drive_service.files().get_media(fileId=file_id)
+        request = drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
         buf = io.BytesIO(request.execute())
         import fitz
-
         doc = fitz.open(stream=buf, filetype="pdf")
         pages = [page.get_text("text") for page in doc]
         doc.close()
         return "\n\n".join(p for p in pages if p.strip())
+    elif mime in (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+    ):
+        return extract_from_docx(file_id, drive_service)
+    elif mime in (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.ms-excel",
+    ):
+        return extract_from_xlsx(file_id, drive_service)
+    elif mime in (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.ms-powerpoint",
+    ):
+        return extract_from_pptx(file_id, drive_service)
     else:
-        # Best-effort: try plain export
-        try:
-            data = (
-                drive_service.files()
-                .export(fileId=file_id, mimeType="text/plain")
-                .execute()
-            )
-            if isinstance(data, bytes):
-                return data.decode("utf-8", errors="replace")
-            return str(data)
-        except Exception as exc:
-            raise ValueError(
-                f"Unsupported MIME type '{mime}' for file {file_id}"
-            ) from exc
+        raise ValueError(f"Unsupported MIME type '{mime}' for file {file_id}")
 
 
 def list_drive_folder(
@@ -224,34 +318,7 @@ def list_drive_folder(
     Raises:
         ValueError: If no folder with *folder_name* is found.
     """
-    # Locate the folder — try multiple case variants for robustness
-    candidates = _case_variants(folder_name)
-    folders = []
-    for candidate in candidates:
-        escaped = candidate.replace("'", "\\'")
-        folder_query = (
-            f"name = '{escaped}' "
-            "and mimeType = 'application/vnd.google-apps.folder' "
-            "and trashed = false"
-        )
-        folder_resp = (
-            drive_service.files()
-            .list(
-                q=folder_query,
-                fields="files(id, name)",
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True,
-            )
-            .execute()
-        )
-        folders = folder_resp.get("files", [])
-        if folders:
-            break
-
-    if not folders:
-        raise ValueError(f"Drive folder not found: {folder_name!r}")
-
-    folder_id = folders[0]["id"]
+    folder_id = _resolve_folder_id(folder_name, drive_service)
     return _list_folder_by_id(folder_id, drive_service, recursive=recursive)
 
 
@@ -262,6 +329,8 @@ def _list_folder_by_id(
     List all supported files inside a folder given its Drive ID.
 
     Recursively descends into subfolders when *recursive* is True.
+    Handles Drive API pagination — nextPageToken is followed until all
+    items in every folder level have been retrieved.
 
     Args:
         folder_id:     Google Drive folder ID.
@@ -271,19 +340,20 @@ def _list_folder_by_id(
     Returns:
         Flat list of FileInfo dicts for all supported files found.
     """
-    mime_filter = " or ".join(
-        f"mimeType = '{m}'" for m in _MIME_TO_TYPE
-    )
-    # Query files + subfolders in one call
     all_query = (
         f"'{folder_id}' in parents "
         "and trashed = false"
     )
-    resp = (
-        drive_service.files()
-        .list(
+
+    result: list[dict] = []
+    page_token = None
+
+    while True:
+        kwargs: dict = dict(
             q=all_query,
+            # nextPageToken MUST be in fields or Drive won't return it
             fields=(
+                "nextPageToken, "
                 "files(id, name, mimeType, webViewLink, "
                 "createdTime, modifiedTime, owners)"
             ),
@@ -291,44 +361,138 @@ def _list_folder_by_id(
             includeItemsFromAllDrives=True,
             pageSize=1000,
         )
-        .execute()
-    )
+        if page_token:
+            kwargs["pageToken"] = page_token
 
-    result: list[dict] = []
-    for f in resp.get("files", []):
-        mime = f.get("mimeType", "")
+        resp = drive_service.files().list(**kwargs).execute()
 
-        # Recurse into subfolders
-        if mime == "application/vnd.google-apps.folder" and recursive:
-            result.extend(
-                _list_folder_by_id(f["id"], drive_service, recursive=True)
+        for f in resp.get("files", []):
+            mime = f.get("mimeType", "")
+
+            # Recurse into subfolders (full pagination applied at every level)
+            if mime == "application/vnd.google-apps.folder" and recursive:
+                result.extend(
+                    _list_folder_by_id(f["id"], drive_service, recursive=True)
+                )
+                continue
+
+            if mime not in _MIME_TO_TYPE:
+                continue
+
+            file_type = _MIME_TO_TYPE.get(mime, "Other")
+            owners = f.get("owners", [])
+            author = owners[0].get("displayName", "") if owners else ""
+            result.append(
+                {
+                    "file_id":    f["id"],
+                    "file_name":  f.get("name", ""),
+                    "file_type":  file_type,
+                    "mime_type":  mime,
+                    "source_url": f.get("webViewLink", ""),
+                    "created_at": f.get("createdTime", ""),
+                    "updated_at": f.get("modifiedTime", ""),
+                    "author":     author,
+                }
             )
-            continue
 
-        if mime not in _MIME_TO_TYPE:
-            continue
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
 
-        file_type = _MIME_TO_TYPE.get(mime, "Other")
-        owners = f.get("owners", [])
-        author = owners[0].get("displayName", "") if owners else ""
-        result.append(
-            {
-                "file_id":    f["id"],
-                "file_name":  f.get("name", ""),
-                "file_type":  file_type,
-                "mime_type":  mime,
-                "source_url": f.get("webViewLink", ""),
-                "created_at": f.get("createdTime", ""),
-                "updated_at": f.get("modifiedTime", ""),
-                "author":     author,
-            }
-        )
     return result
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _find_folder_by_name(
+    name: str, drive_service: Any, parent_id: str | None = None
+) -> str | None:
+    """
+    Return the Drive ID of the first folder matching *name*.
+
+    If *parent_id* is given, the search is restricted to direct children of
+    that folder — this prevents picking up a same-named folder elsewhere in
+    Drive.
+
+    Args:
+        name:          Folder display name (exact match).
+        drive_service: Authenticated Drive API service.
+        parent_id:     Optional parent folder ID to scope the search.
+
+    Returns:
+        Folder ID string, or None if not found.
+    """
+    escaped = name.replace("'", "\\'")
+    q = (
+        f"name = '{escaped}' "
+        "and mimeType = 'application/vnd.google-apps.folder' "
+        "and trashed = false"
+    )
+    if parent_id:
+        q += f" and '{parent_id}' in parents"
+
+    resp = drive_service.files().list(
+        q=q,
+        fields="files(id, name)",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+        pageSize=10,
+    ).execute()
+    folders = resp.get("files", [])
+    return folders[0]["id"] if folders else None
+
+
+def _resolve_folder_id(folder_name: str, drive_service: Any) -> str:
+    """
+    Resolve *folder_name* to a Drive folder ID, scoped to DRIVE_ROOT_FOLDER.
+
+    Strategy:
+    1. Locate DRIVE_ROOT_FOLDER (the shared root "Insight Factory - RAG").
+    2. Search for *folder_name* as a **direct child** of that root — this
+       ensures we never pick up a same-named folder from another Drive.
+    3. Try case variants (original → UPPER → lower → Capitalize → Title).
+    4. If the root itself cannot be found, fall back to a global search
+       (permissive mode, emits a warning).
+
+    Args:
+        folder_name:   Client folder name (e.g. "CELIO").
+        drive_service: Authenticated Drive API service.
+
+    Returns:
+        Drive folder ID string.
+
+    Raises:
+        ValueError: If the folder cannot be found even after all fallbacks.
+    """
+    from hybrid.config import DRIVE_ROOT_FOLDER
+
+    # Step 1 — find root
+    root_id = _find_folder_by_name(DRIVE_ROOT_FOLDER, drive_service)
+
+    # Step 2+3 — find client folder within root (with case variants)
+    for candidate in _case_variants(folder_name):
+        fid = _find_folder_by_name(candidate, drive_service, parent_id=root_id)
+        if fid:
+            return fid
+
+    # Step 4 — global fallback (root not shared with service account, etc.)
+    if root_id is None:
+        print(
+            f"[extractor] WARN: root folder '{DRIVE_ROOT_FOLDER}' not found — "
+            "falling back to global Drive search."
+        )
+    for candidate in _case_variants(folder_name):
+        fid = _find_folder_by_name(candidate, drive_service, parent_id=None)
+        if fid:
+            return fid
+
+    raise ValueError(
+        f"Drive folder not found: {folder_name!r} "
+        f"(searched inside '{DRIVE_ROOT_FOLDER}' and globally)"
+    )
 
 
 def _case_variants(name: str) -> list[str]:

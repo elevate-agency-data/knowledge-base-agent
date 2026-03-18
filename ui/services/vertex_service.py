@@ -12,6 +12,28 @@ import time
 from typing import Any
 
 
+def _init_vertex() -> None:
+    """
+    Initialise le SDK Vertex AI avec le project ID string explicite.
+
+    Sans cet appel, le SDK tente de résoudre le project ID depuis les
+    credentials gcloud application-default (qui stockent le numéro de projet),
+    ce qui déclenche un appel Cloud Resource Manager API inutile.
+    """
+    import vertexai
+    from hybrid.config import PROJECT_ID, LOCATION
+    from rag_agent.config import SERVICE_ACCOUNT_PATH
+    try:
+        from google.oauth2 import service_account
+        creds = service_account.Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_PATH,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
+    except Exception:
+        vertexai.init(project=PROJECT_ID, location=LOCATION)
+
+
 def list_corpora() -> list[dict]:
     """
     Return all available Vertex AI RAG corpora.
@@ -20,6 +42,7 @@ def list_corpora() -> list[dict]:
         List of dicts with keys: resource_name, display_name, create_time, update_time.
     """
     try:
+        _init_vertex()
         from vertexai import rag
         corpora = rag.list_corpora()
         return [
@@ -97,6 +120,7 @@ def synthesize_from_context(
     Returns:
         Dict with keys: status, answer, elapsed_s.
     """
+    _init_vertex()
     from vertexai.generative_models import GenerativeModel
     from rag_agent.config import MODEL
 
@@ -104,12 +128,22 @@ def synthesize_from_context(
     try:
         model = GenerativeModel(model_name=MODEL)
 
-        parts = ["Tu es un assistant qui répond en t'appuyant sur les documents fournis."]
+        parts = [
+            "Tu es l'assistant interne d'Elevate, une société de conseil en Data & Analytics. "
+            "Tu réponds EXCLUSIVEMENT à partir des documents internes fournis ci-dessous "
+            "(propositions commerciales, analyses, offres d'accompagnement rédigées par Elevate "
+            "pour ses clients). "
+            "N'utilise JAMAIS ta connaissance générale sur les entreprises ou les marques. "
+            "Si l'information ne figure pas dans les documents, dis-le clairement."
+        ]
         if conversation_context:
             parts.append(f"Historique de la conversation :\n{conversation_context}")
-        parts.append(f"Documents récupérés :\n{rag_context}")
+        parts.append(f"Documents internes Elevate récupérés :\n{rag_context}")
         parts.append(f"Question : {query_text}")
-        parts.append("Réponds de manière claire et concise en te basant uniquement sur les documents.")
+        parts.append(
+            "Réponds de manière claire et concise en te basant UNIQUEMENT sur les documents "
+            "internes fournis. Ne complète pas avec ta connaissance générale."
+        )
 
         response = model.generate_content("\n\n".join(parts))
         return {
@@ -142,8 +176,9 @@ def query(corpus_name: str, query_text: str, context: str = "") -> dict:
         - elapsed_s     : Wall-clock time in seconds
         - corpus_name   : Echo of input
     """
+    _init_vertex()
     from vertexai import rag
-    from vertexai.preview.generative_models import GenerativeModel, Tool
+    from vertexai.generative_models import GenerativeModel, Tool
     from rag_agent.config import DEFAULT_TOP_K, DEFAULT_DISTANCE_THRESHOLD, MODEL
     from rag_agent.tools.utils import get_corpus_resource_name
 

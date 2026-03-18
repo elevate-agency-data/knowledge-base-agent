@@ -64,9 +64,12 @@ def _generate_answer(query: str, context: str) -> str:
     try:
         from vertexai.generative_models import GenerativeModel
         prompt = (
-            "Réponds à la question en te basant uniquement sur le contexte fourni. "
-            "Sois précis et cite les éléments pertinents du contexte.\n\n"
-            f"Contexte :\n{context}\n\n"
+            "Tu es l'assistant interne d'Elevate, société de conseil en Data & Analytics. "
+            "Réponds EXCLUSIVEMENT à partir des documents internes Elevate fournis ci-dessous "
+            "(propositions commerciales, analyses, offres rédigées par Elevate pour ses clients). "
+            "N'utilise JAMAIS ta connaissance générale sur les entreprises ou les marques. "
+            "Si l'information ne figure pas dans les documents, dis-le clairement.\n\n"
+            f"Documents internes Elevate :\n{context}\n\n"
             f"Question : {query}\n\n"
             "Réponse :"
         )
@@ -317,13 +320,16 @@ def _render_hybrid_mono(result: dict, indexes_used: list[str]) -> None:
     if result.get("status") == "error":
         st.error(result.get("message", "Erreur"))
         return
-    retrieval_s = result.get("elapsed_retrieval_s", result.get("elapsed_s", "?"))
-    total_s     = result.get("elapsed_s", "?")
+    retrieval_s    = result.get("elapsed_retrieval_s", result.get("elapsed_s", "?"))
+    total_s        = result.get("elapsed_s", "?")
+    retrieval_query = result.get("retrieval_query", "")
     st.caption(
         f"{total_s}s total (retrieval {retrieval_s}s + génération) · "
         f"{result.get('total_results', 0)} chunks · "
         f"mode `{result.get('retrieval_mode', '—')}`"
     )
+    if retrieval_query:
+        st.caption(f"query retrieval : _{retrieval_query}_")
     # Réponse générée par Gemini
     generated = result.get("generated_answer", "")
     st.markdown(generated if generated else "_Aucune réponse générée._")
@@ -343,15 +349,18 @@ def _render_hybrid_multi(result: dict, indexes_used: list[str]) -> None:
     if result.get("status") == "error":
         st.error(result.get("message", "Erreur"))
         return
-    empty       = result.get("indexes_empty", [])
-    total       = result.get("total_results", 0)
-    total_s     = result.get("elapsed_s", "?")
-    retrieval_s = result.get("elapsed_retrieval_s", total_s)
+    empty          = result.get("indexes_empty", [])
+    total          = result.get("total_results", 0)
+    total_s        = result.get("elapsed_s", "?")
+    retrieval_s    = result.get("elapsed_retrieval_s", total_s)
+    retrieval_query = result.get("retrieval_query", "")
     st.caption(
         f"{total_s}s total (retrieval {retrieval_s}s + génération) · "
         f"{total} chunks · {len(indexes_used)} index"
         + (f" · vides : {', '.join(empty)}" if empty else "")
     )
+    if retrieval_query:
+        st.caption(f"query retrieval : _{retrieval_query}_")
     # Réponse générée par Gemini (sur le contexte fusionné de tous les index)
     generated = result.get("generated_answer", "")
     st.markdown(generated if generated else "_Aucune réponse générée._")

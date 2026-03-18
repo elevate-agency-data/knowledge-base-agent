@@ -385,7 +385,7 @@ def _render_entry(entry: dict) -> None:
 
 # ── History ───────────────────────────────────────────────────────────────────
 
-for entry in reversed(active_cmp.get("history", [])):
+for entry in active_cmp.get("history", []):
     _render_entry(entry)
 
 # ── New query ─────────────────────────────────────────────────────────────────
@@ -408,22 +408,34 @@ if query_input:
 
     st.markdown(f"**{query_input}**")
 
-    # ── Contexte conversationnel (3 derniers échanges) ────────────────────────
-    def _build_context(history: list[dict], n: int = 3) -> str:
+    # ── Contexte conversationnel — un contexte par pipeline (cloisonnés) ────────
+    # Chaque pipeline n'utilise QUE ses propres réponses précédentes comme
+    # contexte de conversation.  Mélanger les deux pipelines fausserait le
+    # contexte fourni à chacun (ex. Vertex recevrait les réponses Hybrid).
+
+    def _build_context_vertex(history: list[dict], n: int = 3) -> str:
         recent = history[-n:] if len(history) >= n else history
         lines = []
         for entry in recent:
             lines.append(f"Q: {entry['query']}")
-            answer = (
-                entry.get("hybrid", {}).get("generated_answer")
-                or entry.get("vertex", {}).get("answer")
-                or ""
-            )
+            answer = entry.get("vertex", {}).get("answer") or ""
             if answer:
                 lines.append(f"R: {str(answer)[:200]}")
         return "\n".join(lines)
 
-    conv_context = _build_context(active_cmp.get("history", []))
+    def _build_context_hybrid(history: list[dict], n: int = 3) -> str:
+        recent = history[-n:] if len(history) >= n else history
+        lines = []
+        for entry in recent:
+            lines.append(f"Q: {entry['query']}")
+            answer = entry.get("hybrid", {}).get("generated_answer") or ""
+            if answer:
+                lines.append(f"R: {str(answer)[:200]}")
+        return "\n".join(lines)
+
+    history = active_cmp.get("history", [])
+    conv_context_vertex = _build_context_vertex(history)
+    conv_context_hybrid = _build_context_hybrid(history)
 
     # ── Step 1: resolve indexes (fast, avant l'exécution lourde) ─────────────
     resolved: list[str] = []
@@ -452,7 +464,7 @@ if query_input:
             return {"status": "skipped", "answer": "", "sources": [],
                     "elapsed_s": 0, "corpus_name": ""}
         from services.vertex_service import query as vq
-        return vq(corpus, query_input, context=conv_context)
+        return vq(corpus, query_input, context=conv_context_vertex)
 
     def _run_hybrid():
         import time
@@ -462,10 +474,10 @@ if query_input:
             return {"status": "skipped", "answer": "", "sources": [], "elapsed_s": 0}
         if hybrid_mode == "multi":
             from services.hybrid_service import multi_query
-            result = multi_query(resolved, query_input, retrieval_mode, top_k, context=conv_context)
+            result = multi_query(resolved, query_input, retrieval_mode, top_k, context=conv_context_hybrid)
         else:
             from services.hybrid_service import query as hq
-            result = hq(resolved[0], query_input, retrieval_mode, top_k, context=conv_context)
+            result = hq(resolved[0], query_input, retrieval_mode, top_k, context=conv_context_hybrid)
 
         # Génération Gemini sur les chunks récupérés
         if result.get("status") == "success":

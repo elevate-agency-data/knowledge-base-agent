@@ -83,7 +83,9 @@ class DuckDBStore(BaseStore):
         """
         Return (and lazily create) the DuckDB connection.
 
-        Creates parent directories and loads the FTS extension.
+        Creates parent directories, loads the FTS extension, and ensures
+        both tables (hybrid_indexes and chunks) exist on every connection so
+        that tools like hybrid_list_indexes never fail on an empty database.
         """
         if self._conn is None:
             import duckdb
@@ -96,6 +98,9 @@ class DuckDBStore(BaseStore):
                 self._conn.execute("LOAD fts")
             except Exception:
                 pass
+            # Ensure schema exists — idempotent, safe on every connection
+            self._conn.execute(_CREATE_INDEXES_TABLE_SQL)
+            self._conn.execute(_CREATE_TABLE_SQL)
         return self._conn
 
     def _build_where(

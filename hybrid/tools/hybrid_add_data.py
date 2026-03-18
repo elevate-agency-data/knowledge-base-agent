@@ -149,15 +149,22 @@ def hybrid_add_data(
     files_skipped: list[dict] = []
     folders_not_found: list[str] = []
 
+    print(f"[hybrid_add_data] Starting ingestion -> index='{index_name}' | folders={folder_names} | model={embedding_model} | strategy={chunk_strategy}")
+
     for folder_name in folder_names:
+        print(f"[hybrid_add_data] Listing folder: '{folder_name}'")
         try:
             file_infos = list_drive_folder(folder_name, drive_service)
         except ValueError:
+            print(f"[hybrid_add_data]   ERROR Folder not found: '{folder_name}'")
             folders_not_found.append(folder_name)
             continue
         except Exception as exc:
+            print(f"[hybrid_add_data]   ERROR listing '{folder_name}': {exc}")
             folders_not_found.append(f"{folder_name} (error: {exc})")
             continue
+
+        print(f"[hybrid_add_data]   Found {len(file_infos)} file(s) in '{folder_name}'")
 
         for file_info in file_infos:
             url = file_info.get("source_url", "")
@@ -168,6 +175,7 @@ def hybrid_add_data(
             # -- Deduplication logic -----------------------------------------
             # 1. URL already indexed → same exact file, skip unconditionally
             if url and url in already_indexed_urls:
+                print(f"[hybrid_add_data]   Skip (URL already indexed): {file_name}")
                 files_already_indexed += 1
                 continue
 
@@ -176,10 +184,12 @@ def hybrid_add_data(
                 stored_date = indexed_file_dates[file_name]
                 if stored_date == file_updated_at:
                     # Same version — nothing to do
+                    print(f"[hybrid_add_data]   Skip (unchanged): {file_name}")
                     files_already_indexed += 1
                     continue
                 # Different updated_at → file was modified in Drive:
                 # purge stale chunks so we ingest a clean version
+                print(f"[hybrid_add_data]   Update detected ({stored_date} -> {file_updated_at}): {file_name}")
                 store.delete_chunks_by_file_name(file_name, index_name)
                 files_updated += 1
                 # Remove from local cache so URL check stays coherent
@@ -193,10 +203,13 @@ def hybrid_add_data(
                 files_remaining += 1
                 continue
 
+            print(f"[hybrid_add_data]   Processing ({files_processed + 1}): {file_name}")
             try:
                 # 1. Extract text (truncate to protect against huge files)
+                print(f"[hybrid_add_data]      Extracting text…")
                 text = extract_from_url(url, drive_service)
                 if not text.strip():
+                    print(f"[hybrid_add_data]      WARN Empty content - skipped")
                     files_skipped.append(
                         {"file": file_info["file_name"], "reason": "empty content"}
                     )
@@ -208,10 +221,13 @@ def hybrid_add_data(
                 # 2. Chunk
                 chunks = chunk_text(text, strategy=chunk_strategy, **chunk_params)
                 if not chunks:
+                    print(f"[hybrid_add_data]      WARN No chunks produced - skipped")
                     files_skipped.append(
                         {"file": file_info["file_name"], "reason": "no chunks produced"}
                     )
                     continue
+
+                print(f"[hybrid_add_data]      Chunked → {len(chunks)} chunks | Embedding…")
 
                 # 3. Embed in batches of 64 to limit memory pressure
                 texts = [c["content"] for c in chunks]
@@ -235,13 +251,20 @@ def hybrid_add_data(
 
                 files_processed += 1
                 chunks_created  += len(records)
+                print(f"[hybrid_add_data]      Done -> {len(records)} chunks inserted (total: {chunks_created})")
 
             except Exception as exc:
+                print(f"[hybrid_add_data]      ERROR: {exc}")
                 files_skipped.append(
                     {"file": file_info.get("file_name", "unknown"), "reason": str(exc)}
                 )
 
     # -- Build response ------------------------------------------------------
+    print(
+        f"[hybrid_add_data] Ingestion done -> index='{index_name}' | "
+        f"processed={files_processed} | skipped={files_already_indexed} | "
+        f"updated={files_updated} | chunks={chunks_created} | errors={len(files_skipped)}"
+    )
     done = max_files == 0 or files_remaining == 0
     status = "success" if (files_processed > 0 or files_already_indexed > 0) else "error"
 

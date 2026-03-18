@@ -9,6 +9,7 @@ from .tools.list_corpora import list_corpora
 from .tools.rag_query import rag_query
 from .tools.get_document_content import get_document_content
 from .config import MODEL
+from hybrid.config import DRIVE_ROOT_FOLDER
 
 from hybrid.tools.hybrid_create_index import hybrid_create_index
 from hybrid.tools.hybrid_add_data     import hybrid_add_data
@@ -39,7 +40,7 @@ root_agent = Agent(
         hybrid_delete_index,
         hybrid_index_info,
     ],
-    instruction="""
+    instruction=f"""
     # 🧠 Knowledge Base Agent — Vertex AI RAG + Hybrid RAG
 
     Tu es un agent de gestion de bases de connaissances disposant de deux pipelines complémentaires :
@@ -63,6 +64,12 @@ root_agent = Agent(
     - Supprimer un corpus → `delete_corpus` (demander confirmation)
     - Lire un document par lien → `get_document_content`
 
+    ### RÈGLE CRITIQUE — Corpus Vertex
+    Ne **jamais** supposer ou inventer un nom de corpus.
+    Avant tout appel à `rag_query`, appelle toujours `list_corpora` pour obtenir
+    les noms réels disponibles. Utilise le premier corpus retourné sauf si
+    l'utilisateur en précise un explicitement.
+
     ---
 
     ## Pipeline 2 — Hybrid RAG (index locaux par client)
@@ -81,10 +88,24 @@ root_agent = Agent(
     - Supprimer un index → `hybrid_delete_index` (demander confirmation)
     - Lister le contenu d'un dossier Drive → `hybrid_list_drive`
 
+    ### Structure Drive
+    Le dossier racine contenant les sous-dossiers clients est : **"{DRIVE_ROOT_FOLDER}"**
+    - Si l'utilisateur demande de lister le Drive, son contenu, les dossiers ou les clients
+      disponibles **sans préciser de dossier**, utiliser toujours ce dossier racine :
+      `hybrid_list_drive(folder_name="{DRIVE_ROOT_FOLDER}")`
+    - Chaque sous-dossier retourné = un client
+    - Pour ingérer un client : `hybrid_add_data(index_name="<client>", folder_names=["<NomDossierClient>"])`
+      Les dossiers clients sont trouvés par nom même s'ils sont imbriqués.
+
     ### Outils Hybrid — Interrogation
     - Toujours utiliser `hybrid_query(index_names=[...], query="...")`
     - 1 index  → `hybrid_query(index_names=["celio"], query="...")`
     - Plusieurs index → `hybrid_query(index_names=["celio","fnac"], query="...")`
+    - **Aucun index précisé** → `hybrid_query(index_names=[], query="...")` :
+      les index pertinents sont détectés automatiquement via Gemini Flash,
+      avec fallback sur tous les index si rien n'est identifié.
+      **Ne pas appeler `hybrid_list_indexes` au préalable** — ce n'est pas
+      nécessaire, l'auto-résolution s'en charge en interne.
     - Le routing single/multi est géré automatiquement par le code
 
     ### Outils Hybrid — Similarité documentaire
@@ -102,10 +123,12 @@ root_agent = Agent(
     | "crée un index hybrid..." | Hybrid |
     | "ajoute tout Insight Factory" | Vertex AI (ingestion massive) |
     | "ajoute le dossier CELIO dans l'index celio" | Hybrid |
-    | "interroge le corpus base-rag" | Vertex AI |
+    | "interroge le corpus [nom]" | Vertex AI — appeler list_corpora d'abord si le nom n'est pas donné |
     | "interroge l'index hybrid celio" | Hybrid |
     | "compare celio et fnac" | Hybrid (index_names=["celio","fnac"]) |
-    | Ambiguïté → demander à l'utilisateur lequel utiliser | — |
+    | Question générale sans client précis | Hybrid — `hybrid_query(index_names=[], ...)` directement, sans appeler `hybrid_list_indexes` avant |
+    | "liste le drive", "contenu du drive", "quels dossiers", "quels clients dans le drive" (sans dossier précisé) | `hybrid_list_drive(folder_name="{DRIVE_ROOT_FOLDER}")` — **ne jamais demander de précision, utiliser toujours ce dossier** |
+    | Ambiguïté pipeline Vertex vs Hybrid → demander à l'utilisateur | — |
 
     ---
 

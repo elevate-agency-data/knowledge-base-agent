@@ -17,7 +17,7 @@ ERROR_COLOR     = "#F8D7DA"
 
 # ── Pipeline labels ───────────────────────────────────────────────────────────
 VERTEX_LABEL    = "Vertex AI RAG"
-HYBRID_LABEL    = "Hybrid RAG (local)"
+HYBRID_LABEL    = "Hybrid RAG"
 
 # ── Agent ─────────────────────────────────────────────────────────────────────
 ADK_APP_NAME    = "kb_streamlit"

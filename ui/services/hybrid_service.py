@@ -56,6 +56,19 @@ def delete_index(index_name: str) -> dict:
     return hybrid_delete_index(index_name=index_name, confirm=True)
 
 
+# ── Index resolution ──────────────────────────────────────────────────────────
+
+def resolve_indexes(query: str, available: list[str]) -> list[str]:
+    """
+    Determine which indexes to query for a given user prompt.
+
+    Delegates to shared.index_resolver so the same logic is used by
+    hybrid_query (ADK tool), Simple Chat, and RAG Comparison.
+    """
+    from shared.index_resolver import resolve_indexes as _resolve
+    return _resolve(query, available)
+
+
 # ── Retrieval ─────────────────────────────────────────────────────────────────
 
 def query(index_name: str, query_text: str,

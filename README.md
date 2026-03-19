@@ -11,28 +11,34 @@ knowledge-base-agent/
 ├── rag_agent/          # Pipeline Vertex AI RAG (Google Cloud)
 │   ├── agent.py        # Agent ADK principal (gemini-2.5-pro)
 │   ├── config.py       # Paramètres GCP, chunking, retrieval
+│   ├── simple_chat_agent.py  # Agent chat simplifié (sans outils)
 │   └── tools/          # Outils ADK : create_corpus, add_data, rag_query...
 │
 ├── hybrid/             # Pipeline Hybrid RAG (local)
-│   ├── config.py       # Paramètres env, embeddings, retrieval
+│   ├── config.py       # Paramètres env, embeddings, retrieval, DRIVE_ROOT_FOLDER
 │   ├── embeddings/     # 5 modèles : minilm-384, mpnet-768, e5-large-1024, bge-m3, vertex
-│   ├── ingestion/      # Extraction Drive, chunking (fixed/semantic/hierarchical)
-│   ├── retrieval/      # Dense (cosinus), Sparse (BM25), Hybrid (RRF)
-│   ├── stores/         # DuckDB (local) et AlloyDB (GCP)
-│   ├── tools/          # Outils ADK : hybrid_query, hybrid_find_similar...
+│   ├── ingestion/      # Extraction Drive (PDF, Docx, Xlsx, Pptx), chunking HuggingFace
+│   ├── retrieval/      # Dense (HNSW/cosinus), Sparse (BM25), Hybrid (RRF)
+│   ├── stores/         # DuckDB (FLOAT[768] + HNSW VSS) et AlloyDB (GCP)
+│   ├── tools/          # Outils ADK : hybrid_query, hybrid_list_drive...
 │   └── benchmark/      # Évaluation 90 combinaisons (MRR, nDCG, Recall, Precision)
 │
 ├── shared/
-│   └── query_rewriter.py  # Réécriture sémantique des queries (gemini-2.0-flash)
+│   ├── query_rewriter.py   # Réécriture sémantique des queries (gemini-2.0-flash)
+│   └── index_resolver.py   # Résolution automatique des index via Gemini Flash
 │
-├── ui/                 # Interface Streamlit (4 pages)
+├── ui/                 # Interface Streamlit (5 pages)
 │   ├── app.py
 │   ├── pages/
 │   │   ├── 1_Agent_Chat.py       # Chat avec l'agent ADK
 │   │   ├── 2_RAG_Comparison.py   # Comparaison Vertex vs Hybrid en parallèle
 │   │   ├── 3_Index_Manager.py    # Gestion des index Hybrid
-│   │   └── 4_Benchmark.py        # Visualisation résultats benchmark
-│   ├── services/       # Wrappers service pour vertex_service et hybrid_service
+│   │   ├── 4_Benchmark.py        # Visualisation résultats benchmark
+│   │   └── 5_Simple_Chat.py      # Chat simplifié (toggle RAG on/off)
+│   ├── services/
+│   │   ├── vertex_service.py     # Wrapper Vertex AI (query, direct_query, synthesize)
+│   │   ├── hybrid_service.py     # Wrapper Hybrid RAG (query, resolve_indexes)
+│   │   └── session_store.py      # Sessions de comparaison (DuckDB)
 │   └── components/     # Composants réutilisables (source_card, chat_message...)
 │
 ├── docs/
@@ -101,13 +107,17 @@ DEFAULT_EMBEDDING_MODEL = "publishers/google/models/text-embedding-005"
 ### 4. Paramètres Hybrid RAG (`hybrid/config.py`)
 
 ```python
-ENV                     = "local"          # "local" → DuckDB | "gcp" → AlloyDB pour prod 
+ENV                     = "local"          # "local" → DuckDB | "gcp" → AlloyDB pour prod
 DUCKDB_PATH             = "hybrid/data/hybrid.duckdb"
+DRIVE_ROOT_FOLDER       = "Insight Factory - RAG"  # dossier racine Drive
 DEFAULT_EMBEDDING_MODEL = "mpnet-768"
-CHUNK_SIZE              = 512
+CHUNK_SIZE              = 384              # en tokens (= max_seq_length du modèle)
+CHUNK_OVERLAP           = 64              # en tokens
 DENSE_WEIGHT            = 0.7
 SPARSE_WEIGHT           = 0.3
 ```
+
+`DRIVE_ROOT_FOLDER` est le point d'entrée de toutes les recherches Drive. La recherche de dossiers clients est toujours restreinte à ses enfants directs, évitant les collisions de noms entre clients.
 
 ---
 
@@ -157,22 +167,49 @@ Corpus hébergés dans Google Cloud. Ingestion et retrieval gérés par l'API Ve
 
 ### Pipeline 2 — Hybrid RAG
 
-Index locaux par dossier, stockés dans DuckDB. Recherche dense + sparse fusionnée par RRF.
+Index locaux par dossier, stockés dans DuckDB (schema `FLOAT[768]` + HNSW index via VSS). Recherche dense + sparse fusionnée par RRF.
 
 | Outil ADK | Description |
 |---|---|
 | `hybrid_create_index` | Crée un index pour un dossier (ex: "celio") |
-| `hybrid_add_data` | Ingère des dossiers Drive dans un index |
+| `hybrid_add_data` | Ingère des dossiers Drive dans un index (récursif, tous types de fichiers) |
 | `hybrid_query` | Interroge un ou plusieurs index (routing auto single/multi) |
 | `hybrid_find_similar` | Trouve les documents similaires à un lien Drive (vecteur à vecteur) |
 | `hybrid_list_indexes` | Liste tous les index disponibles |
 | `hybrid_index_info` | Détail d'un index (fichiers, chunks, modèle) |
 | `hybrid_delete_index` | Supprime un index (confirmation requise) |
-| `hybrid_list_drive` | Liste le contenu d'un dossier Drive |
+| `hybrid_list_drive` | Liste le contenu complet d'un dossier Drive (récursif, tous niveaux) |
 
-**Points forts :** Isolation par dossier, warm start rapide (~7s), recherche multi-index, similarité documentaire.
+**Points forts :** Isolation par dossier, warm start rapide (~0.05s HNSW), recherche multi-index, similarité documentaire.
 
 **Limites :** Ressources locales (RAM selon le modèle d'embedding), pas de partage cloud natif.
+
+#### Types de fichiers supportés à l'ingestion
+
+| Format | Extension | Extraction |
+|---|---|---|
+| Google Doc | — | Export texte via Drive API |
+| Google Sheet | — | Export CSV via Drive API |
+| Google Slides | — | Export texte via Drive API |
+| PDF | `.pdf` | pymupdf (in-memory) |
+| Word | `.docx`, `.doc` | python-docx |
+| Excel | `.xlsx`, `.xls` | openpyxl |
+| PowerPoint | `.pptx`, `.ppt` | python-pptx |
+
+#### Traversée Drive
+
+L'ingestion et le listing parcourent l'**arborescence complète** (récursif, pagination Drive incluse). La recherche de dossiers est toujours scopée au `DRIVE_ROOT_FOLDER` pour éviter les collisions de noms entre clients.
+
+---
+
+## Résolution automatique des index
+
+Avant chaque requête multi-index, `shared/index_resolver.py` détermine via Gemini Flash quels index interroger en fonction de la query :
+
+- Si la query mentionne un client précis → index correspondant uniquement
+- Si la query est générale ou comparative → tous les index
+
+Utilisé par l'outil `hybrid_query`, la page Simple Chat et la page Comparaison RAG.
 
 ---
 
@@ -182,16 +219,20 @@ Avant chaque retrieval, la query utilisateur est réécrite par `gemini-2.0-flas
 
 ```
 Query brute : "compare celio et fnac"
-Query réécrite : "offres produits, services clients et positionnement commercial"
+Query réécrite : "Celio Fnac offres produits services positionnement commercial"
 ```
 
-Le rewriter supprime les verbes d'action et garde les concepts. Il accepte un paramètre `context` (3 derniers échanges) pour résoudre les références conversationnelles :
+Le rewriter supprime les verbes d'action et garde les concepts. **Les noms propres (clients, marques, projets) sont toujours conservés** pour éviter de perdre les entités dans l'embedding. Il accepte un paramètre `context` pour résoudre les références conversationnelles. Chaque pipeline (Vertex et Hybrid) reçoit un contexte issu **uniquement de ses propres réponses précédentes** — les contextes ne sont jamais mélangés.
 
-```
-Contexte : "Q: chiffrage celio"
-Query : "combien sera facturé la prestation ?"
-→ "tarifs facturation prestation Celio"
-```
+### Grounding Elevate
+
+Toutes les réponses LLM (agent, Simple Chat, Comparaison) sont cadrées dans le contexte Elevate : les documents sont des propositions commerciales et analyses internes. Le LLM ne complète **jamais** avec sa connaissance générale des entreprises.
+
+### Similarité documentaire (Drive URL)
+
+Quand la query contient une URL Google Drive :
+- **Hybrid** : `hybrid_find_similar` extrait le contenu du document, encode en vecteur moyen et cherche par distance cosinus — pas de query texte.
+- **Vertex** : `extract_query_from_drive_url` extrait le contenu, le résume via Gemini Flash, puis utilise ce résumé comme query de recherche dans le corpus.
 
 ---
 
@@ -213,23 +254,32 @@ Voir `docs/embedding_models.md` pour la documentation complète.
 
 | Mode | Description | Usage |
 |---|---|---|
-| `dense` | Similarité cosinus entre embeddings | Questions sémantiques, paraphrases |
-| `sparse` | BM25 sur le texte brut | Codes produits, noms propres, jargon exact |
+| `dense` | `array_cosine_similarity` + HNSW index (DuckDB VSS) | Questions sémantiques, paraphrases |
+| `sparse` | BM25 via DuckDB FTS | Codes produits, noms propres, jargon exact |
 | `hybrid` | Fusion RRF dense + sparse (défaut) | Production générale |
 
 Paramètres de fusion dans `hybrid/config.py` : `DENSE_WEIGHT=0.7`, `SPARSE_WEIGHT=0.3`, `RRF_K=60`.
 
+### Performance dense search (HNSW)
+
+| Méthode | Latence (warm, 10k chunks) |
+|---|---|
+| NumPy row-by-row (ancien) | ~3.5s |
+| `list_cosine_similarity` SQL | ~0.7s |
+| `array_cosine_similarity` + HNSW | **~0.05s** |
+
+Le schema `FLOAT[768]` (fixed-size array) est requis par HNSW. L'index est reconstruit automatiquement après chaque ingestion/suppression. Fallback en cascade : `array_cosine_similarity` → `list_cosine_similarity` → NumPy.
+
 ---
 
-## Stratégies de chunking
+## Chunking
+
+Le chunking est réalisé en **tokens réels** via le tokenizer HuggingFace du modèle d'embedding (mpnet-768 : `max_seq_length = 384`). Chaque chunk utilise 100% de la fenêtre du modèle — aucune approximation en caractères.
 
 | Stratégie | Description | Usage |
 |---|---|---|
-| `fixed-128` | Chunks de 128 tokens, overlap 25 | Questions très précises, faits isolés |
-| `fixed-256` | Chunks de 256 tokens, overlap 51 | FAQs, fiches produits |
-| `fixed-512` | Chunks de 512 tokens, overlap 102 | Défaut recommandé |
-| `fixed-1024` | Chunks de 1024 tokens, overlap 204 | Contrats, rapports longs |
-| `semantic` | Coupure aux ruptures sémantiques (seuil 0.85) | CR de réunion, textes narratifs |
+| `fixed` (défaut) | 384 tokens, overlap 64, tokenizer HuggingFace | Production générale |
+| `semantic` | Coupure aux ruptures sémantiques (seuil cosinus 0.85) | CR de réunion, textes narratifs |
 | `hierarchical` | Chunks enfants 256 + parents 1024 | Documents longs multi-niveaux |
 
 ---
@@ -280,9 +330,10 @@ Les résultats sont visualisables dans la page **Benchmark** de l'UI Streamlit (
 | Page | Description |
 |---|---|
 | **Agent Chat** | Chat conversationnel avec l'agent ADK (gemini-2.5-pro), avec affichage des appels d'outils |
-| **Comparaison RAG** | Vertex AI vs Hybrid en parallèle sur la même question, avec historique de session |
+| **Comparaison RAG** | Vertex AI vs Hybrid en parallèle sur la même question — sessions persistées en DuckDB, contextes cloisonnés par pipeline, ordre chronologique |
 | **Index Manager** | Création, alimentation et suppression des index Hybrid |
 | **Benchmark** | Visualisation des résultats benchmark (podium, leaderboard, graphiques, heatmap) |
+| **Simple Chat** | Chat simplifié pour utilisateurs non-techniques — toggle RAG on/off, choix Vertex AI ou Hybrid |
 
 ---
 
@@ -290,8 +341,14 @@ Les résultats sont visualisables dans la page **Benchmark** de l'UI Streamlit (
 
 ```
 hybrid/data/
-├── hybrid.duckdb              # Base de données DuckDB (ignorée par git)
+├── hybrid.duckdb              # Index Hybrid RAG (ignoré par git)
 └── benchmark_results.json     # Résultats du dernier benchmark
+
+ui/data/                       # Données UI (ignorées par git)
+├── comparaison/
+│   └── comparaison.duckdb     # Sessions de comparaison RAG (DuckDB)
+└── agent_display/
+    └── {session_id}.json      # Affichage enrichi des sessions agent
 ```
 
 ---
@@ -307,10 +364,15 @@ google-api-python-client
 # Hybrid RAG
 duckdb
 sentence-transformers
+transformers           # Tokenizer HuggingFace (chunking en tokens)
 FlagEmbedding          # BGE-M3
 pymupdf                # Extraction PDF
-langchain-text-splitters
 scikit-learn
+
+# Extraction fichiers Office
+python-docx            # .docx / .doc
+openpyxl               # .xlsx / .xls
+python-pptx            # .pptx / .ppt
 
 # UI
 streamlit>=1.35

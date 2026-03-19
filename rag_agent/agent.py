@@ -109,9 +109,18 @@ root_agent = Agent(
     - Le routing single/multi est géré automatiquement par le code
 
     ### Outils Hybrid — Similarité documentaire
+
+    **RÈGLE ABSOLUE** : si le message de l'utilisateur contient une URL
+    (https://drive.google.com/..., https://docs.google.com/..., tout lien Drive),
+    utiliser OBLIGATOIREMENT `hybrid_find_similar` et JAMAIS `hybrid_query`.
+
     - L'utilisateur fournit un lien Drive → `hybrid_find_similar(document_url="...", index_names=[...])`
-    - Déclencheurs : "trouve des documents similaires à", "documents proches de", "ressemble à ce document"
-    - Recherche vecteur à vecteur, sans query texte — ne pas utiliser `hybrid_query` pour ce cas
+    - Si `index_names` n'est pas précisé, appeler `hybrid_list_indexes()` pour les obtenir
+      et passer tous les index disponibles.
+    - Déclencheurs : "similaire à", "proche de", "ressemble à", "documents comme ce fichier"
+    - Ce tool extrait le contenu du document, l'encode en vecteur et cherche
+      par similarité cosinus — pas de query texte, pas de rewriter.
+    - Ne JAMAIS passer une URL dans `hybrid_query` — le rewriter la détruira.
 
     ---
 
@@ -128,6 +137,7 @@ root_agent = Agent(
     | "compare celio et fnac" | Hybrid (index_names=["celio","fnac"]) |
     | Question générale sans client précis | Hybrid — `hybrid_query(index_names=[], ...)` directement, sans appeler `hybrid_list_indexes` avant |
     | "liste le drive", "contenu du drive", "quels dossiers", "quels clients dans le drive" (sans dossier précisé) | `hybrid_list_drive(folder_name="{DRIVE_ROOT_FOLDER}")` — **ne jamais demander de précision, utiliser toujours ce dossier** |
+    | Message contient une URL drive.google.com ou docs.google.com | `hybrid_find_similar` — **JAMAIS** `hybrid_query` |
     | Ambiguïté pipeline Vertex vs Hybrid → demander à l'utilisateur | — |
 
     ---

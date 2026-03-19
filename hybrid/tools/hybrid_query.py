@@ -11,9 +11,15 @@ Index auto-resolution:
   Gemini Flash selects the relevant ones based on the query (fallback: all).
 """
 
+import re
+
 from hybrid.tools.hybrid_rag_query   import hybrid_rag_query
 from hybrid.tools.hybrid_multi_query import hybrid_multi_query
 from shared.query_rewriter           import rewrite_query
+
+_DRIVE_URL_RE = re.compile(
+    r"https?://(?:drive|docs)\.google\.com/\S+", re.IGNORECASE
+)
 
 
 def hybrid_query(
@@ -55,6 +61,19 @@ def hybrid_query(
         - ``indexes_resolved`` : list of index names actually queried
     """
     index_names = [n.strip().lower() for n in (index_names or []) if n.strip()]
+
+    # ── Safety net: redirect Drive URLs to hybrid_find_similar ────────────────
+    url_match = _DRIVE_URL_RE.search(query)
+    if url_match:
+        from hybrid.tools.hybrid_find_similar import hybrid_find_similar
+        if not index_names:
+            from hybrid.tools.hybrid_list_indexes import hybrid_list_indexes
+            list_result = hybrid_list_indexes()
+            index_names = [idx["index_name"] for idx in list_result.get("indexes", [])]
+        return hybrid_find_similar(
+            document_url=url_match.group(0),
+            index_names=index_names,
+        )
 
     # ── Auto-resolve indexes when none are specified ──────────────────────────
     if not index_names:

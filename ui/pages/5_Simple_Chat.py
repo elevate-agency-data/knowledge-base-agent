@@ -241,10 +241,19 @@ if user_input:
 
             # ── Vertex AI RAG ─────────────────────────────────────────────────
             elif st.session_state.sc_pipeline == _PIPELINE_VERTEX:
+                import re as _re
                 from services.vertex_service import query as vertex_query
+                _drive_url = _re.search(
+                    r"https?://(?:drive|docs)\.google\.com/\S+", user_input, _re.IGNORECASE
+                )
+                if _drive_url:
+                    from services.vertex_service import extract_query_from_drive_url
+                    query_text = extract_query_from_drive_url(_drive_url.group(0))
+                else:
+                    query_text = user_input
                 result = vertex_query(
                     corpus_name=st.session_state.sc_corpus,
-                    query_text=user_input,
+                    query_text=query_text,
                     context=context,
                 )
 
@@ -273,67 +282,121 @@ if user_input:
 
             # ── Hybrid RAG — résolution automatique des index ─────────────────
             else:
+                import re
                 import time
                 from services.hybrid_service import (
                     list_indexes,
                     resolve_indexes,
                     multi_query as hybrid_multi_query,
                 )
-                from services.vertex_service import synthesize_from_context
 
                 all_indexes = [i["index_name"] for i in list_indexes()]
                 if not all_indexes:
                     raise RuntimeError("Aucun index Hybrid disponible.")
 
-                with st.spinner("Détection des index pertinents…"):
-                    target_indexes = resolve_indexes(user_input, all_indexes)
-
-                t0        = time.perf_counter()
-                retrieval = hybrid_multi_query(
-                    index_names=target_indexes,
-                    query_text=user_input,
-                    context=context,
+                _drive_url = re.search(
+                    r"https?://(?:drive|docs)\.google\.com/\S+", user_input, re.IGNORECASE
                 )
 
-                if retrieval.get("status") == "error":
-                    raise RuntimeError(retrieval.get("message", "Erreur Hybrid"))
+                # ── Similarité documentaire (URL Drive détectée) ──────────────
+                if _drive_url:
+                    from hybrid.tools.hybrid_find_similar import hybrid_find_similar
+                    t0     = time.perf_counter()
+                    result = hybrid_find_similar(
+                        document_url=_drive_url.group(0),
+                        index_names=all_indexes,
+                    )
+                    elapsed = round(time.perf_counter() - t0, 2)
 
-                synth = synthesize_from_context(
-                    query_text=user_input,
-                    rag_context=retrieval.get("answer", ""),
-                    conversation_context=context,
-                )
+                    if result.get("status") == "error":
+                        raise RuntimeError(result.get("message", "Erreur find_similar"))
 
-                if synth.get("status") == "error":
-                    raise RuntimeError(synth.get("message", "Erreur de synthèse"))
+                    similar_docs = result.get("results", [])
+                    sources = [
+                        {"file_name": r["file_name"], "source_url": r["source_url"]}
+                        for r in similar_docs
+                    ]
+                    answer = (
+                        f"Voici les **{len(similar_docs)} documents** les plus similaires "
+                        f"à votre document (recherche par similarité vectorielle) :"
+                    )
 
-                answer  = synth.get("answer", "")
-                sources = retrieval.get("sources", [])
-                elapsed = round(time.perf_counter() - t0, 2)
-                index_label = (
-                    target_indexes[0]
-                    if len(target_indexes) == 1
-                    else f"{len(target_indexes)} index"
-                )
+                    with st.chat_message("assistant"):
+                        st.markdown(answer)
+                        if similar_docs:
+                            lines = []
+                            for r in similar_docs:
+                                score = round(r.get("score", 0) * 100, 1)
+                                url   = r.get("source_url", "")
+                                name  = r.get("file_name", url)
+                                idx   = r.get("index_name", "")
+                                lines.append(f"- [{name}]({url}) · `{idx}` · {score}%")
+                            st.markdown("\n".join(lines))
+                        st.caption(f"{elapsed}s · {len(all_indexes)} index")
 
-                retrieval_query = retrieval.get("retrieval_query", "")
-                with st.chat_message("assistant"):
-                    st.markdown(answer)
-                    if sources:
-                        with st.expander(f"Sources ({len(sources)})", expanded=False):
-                            render_sources(sources, pipeline="hybrid")
-                    caption = f"{elapsed}s · {index_label}"
-                    if retrieval_query and retrieval_query != user_input:
-                        caption += f" · query : _{retrieval_query}_"
-                    st.caption(caption)
+                    st.session_state.sc_messages.append({
+                        "role":      "assistant",
+                        "text":      answer + "\n" + "\n".join(
+                            f"- {r['file_name']}" for r in similar_docs
+                        ),
+                        "sources":   sources,
+                        "pipeline":  "hybrid",
+                        "elapsed_s": elapsed,
+                    })
 
-                st.session_state.sc_messages.append({
-                    "role":      "assistant",
-                    "text":      answer,
-                    "sources":   sources,
-                    "pipeline":  "hybrid",
-                    "elapsed_s": elapsed,
-                })
+                # ── Requête texte classique ───────────────────────────────────
+                else:
+                    from services.vertex_service import synthesize_from_context
+
+                    with st.spinner("Détection des index pertinents…"):
+                        target_indexes = resolve_indexes(user_input, all_indexes)
+
+                    t0        = time.perf_counter()
+                    retrieval = hybrid_multi_query(
+                        index_names=target_indexes,
+                        query_text=user_input,
+                        context=context,
+                    )
+
+                    if retrieval.get("status") == "error":
+                        raise RuntimeError(retrieval.get("message", "Erreur Hybrid"))
+
+                    synth = synthesize_from_context(
+                        query_text=user_input,
+                        rag_context=retrieval.get("answer", ""),
+                        conversation_context=context,
+                    )
+
+                    if synth.get("status") == "error":
+                        raise RuntimeError(synth.get("message", "Erreur de synthèse"))
+
+                    answer  = synth.get("answer", "")
+                    sources = retrieval.get("sources", [])
+                    elapsed = round(time.perf_counter() - t0, 2)
+                    index_label = (
+                        target_indexes[0]
+                        if len(target_indexes) == 1
+                        else f"{len(target_indexes)} index"
+                    )
+
+                    retrieval_query = retrieval.get("retrieval_query", "")
+                    with st.chat_message("assistant"):
+                        st.markdown(answer)
+                        if sources:
+                            with st.expander(f"Sources ({len(sources)})", expanded=False):
+                                render_sources(sources, pipeline="hybrid")
+                        caption = f"{elapsed}s · {index_label}"
+                        if retrieval_query and retrieval_query != user_input:
+                            caption += f" · query : _{retrieval_query}_"
+                        st.caption(caption)
+
+                    st.session_state.sc_messages.append({
+                        "role":      "assistant",
+                        "text":      answer,
+                        "sources":   sources,
+                        "pipeline":  "hybrid",
+                        "elapsed_s": elapsed,
+                    })
 
         except Exception as exc:
             error_msg = str(exc)

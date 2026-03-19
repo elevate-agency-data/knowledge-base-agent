@@ -17,7 +17,12 @@ from __future__ import annotations
 
 import path_setup  # noqa: F401
 import concurrent.futures
+import re
 import streamlit as st
+
+_DRIVE_URL_RE = re.compile(
+    r"https?://(?:drive|docs)\.google\.com/\S+", re.IGNORECASE
+)
 
 from config import (
     APP_TITLE, VERTEX_COLOR, HYBRID_COLOR,
@@ -468,16 +473,42 @@ if query_input:
 
     # ── Step 3: pipeline functions ────────────────────────────────────────────
 
+    _drive_url_match = _DRIVE_URL_RE.search(query_input)
+
     def _run_vertex():
         if not corpus:
             return {"status": "skipped", "answer": "", "sources": [],
                     "elapsed_s": 0, "corpus_name": ""}
+        if _drive_url_match:
+            from services.vertex_service import extract_query_from_drive_url, query as vq
+            doc_query = extract_query_from_drive_url(_drive_url_match.group(0))
+            return vq(corpus, doc_query, context=conv_context_vertex)
         from services.vertex_service import query as vq
         return vq(corpus, query_input, context=conv_context_vertex)
 
     def _run_hybrid():
         import time
         t0 = time.perf_counter()
+
+        # Drive URL → similarité documentaire vectorielle
+        if _drive_url_match:
+            from hybrid.tools.hybrid_find_similar import hybrid_find_similar
+            result = hybrid_find_similar(
+                document_url=_drive_url_match.group(0),
+                index_names=resolved or all_indexes,
+            )
+            result["elapsed_s"] = round(time.perf_counter() - t0, 2)
+            if result.get("status") == "success":
+                result["generated_answer"] = (
+                    "Documents trouvés par similarité vectorielle "
+                    f"(distance cosinus sur {len(result.get('results', []))} fichiers)."
+                )
+                # Normalise sources pour l'affichage
+                result["sources"] = [
+                    {"file_name": r["file_name"], "source_url": r["source_url"]}
+                    for r in result.get("results", [])
+                ]
+            return result
 
         if not resolved:
             return {"status": "skipped", "answer": "", "sources": [], "elapsed_s": 0}

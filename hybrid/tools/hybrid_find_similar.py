@@ -62,7 +62,11 @@ def hybrid_find_similar(
 
     index_names = [n.strip().lower() for n in (index_names or []) if n.strip()]
     if not index_names:
-        return {"status": "error", "message": "index_names must not be empty."}
+        from hybrid.tools.hybrid_list_indexes import hybrid_list_indexes
+        list_result = hybrid_list_indexes()
+        index_names = [idx["index_name"] for idx in list_result.get("indexes", [])]
+    if not index_names:
+        return {"status": "error", "message": "No hybrid indexes available."}
 
     # -- Connect to Drive ----------------------------------------------------
     try:

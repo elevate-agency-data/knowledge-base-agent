@@ -36,8 +36,8 @@ ALLOYDB_CONNECTION_STRING: str = ""  # e.g. "postgresql://user:pass@host:5432/db
 # ---------------------------------------------------------------------------
 # Chunking
 # ---------------------------------------------------------------------------
-CHUNK_SIZE: int = 512
-CHUNK_OVERLAP: int = 100
+CHUNK_SIZE: int = 384        # in tokens (= mpnet-768 max_seq_length)
+CHUNK_OVERLAP: int = 64     # in tokens
 SEMANTIC_BREAKPOINT_THRESHOLD: float = 0.85
 PARENT_CHUNK_SIZE: int = 1024
 CHILD_CHUNK_SIZE: int = 256

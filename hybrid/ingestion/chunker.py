@@ -2,7 +2,7 @@
 Text chunking strategies.
 
 Three strategies:
-- ``fixed``        : fixed-size token overlap via langchain-text-splitters
+- ``fixed``        : fixed-size token overlap via HuggingFace tokenizer
 - ``semantic``     : sentence-level splitting on cosine similarity drops
 - ``hierarchical`` : parent + child chunks linked by ID
 
@@ -32,31 +32,58 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 
-def chunk_fixed(text: str, size: int = 512, overlap: int = 100) -> list[dict]:
-    """
-    Split *text* into fixed-size overlapping chunks.
+_TOKENIZER_NAME = "sentence-transformers/all-mpnet-base-v2"
+_tokenizer_cache = None
 
-    Uses ``langchain_text_splitters.RecursiveCharacterTextSplitter`` for
-    clean paragraph/sentence-aware splitting.
+
+def _get_tokenizer():
+    """Lazy-load and cache the HuggingFace tokenizer for mpnet-768."""
+    global _tokenizer_cache
+    if _tokenizer_cache is None:
+        from transformers import AutoTokenizer
+        _tokenizer_cache = AutoTokenizer.from_pretrained(_TOKENIZER_NAME)
+    return _tokenizer_cache
+
+
+def chunk_fixed(text: str, size: int = 384, overlap: int = 64) -> list[dict]:
+    """
+    Split *text* into fixed-size overlapping chunks measured in **tokens**.
+
+    Uses the HuggingFace tokenizer for mpnet-768 directly:
+      1. Tokenize the full text into token IDs.
+      2. Slide a window of *size* tokens with *overlap* stride.
+      3. Decode each window back to text.
+
+    This guarantees every chunk fits within the embedding model's context
+    window (384 tokens for all-mpnet-base-v2) — no approximation.
 
     Args:
         text:    Source text to split.
-        size:    Target chunk size in characters.
-        overlap: Overlap between consecutive chunks in characters.
+        size:    Target chunk size in **tokens** (default 380, mpnet max = 384).
+        overlap: Overlap between consecutive chunks in **tokens**.
 
     Returns:
         List of chunk dicts.
     """
-    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    if not text or not text.strip():
+        return []
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=size,
-        chunk_overlap=overlap,
-        separators=["\n\n", "\n", ". ", "! ", "? ", " ", ""],
-    )
-    texts = splitter.split_text(text)
-    if not texts:
-        texts = [text] if text.strip() else []
+    tokenizer = _get_tokenizer()
+    token_ids = tokenizer.encode(text, add_special_tokens=False)
+
+    if not token_ids:
+        return []
+
+    stride = max(1, size - overlap)
+    texts: list[str] = []
+
+    for start in range(0, len(token_ids), stride):
+        window = token_ids[start : start + size]
+        decoded = tokenizer.decode(window, skip_special_tokens=True).strip()
+        if decoded:
+            texts.append(decoded)
+        if start + size >= len(token_ids):
+            break
 
     chunks: list[dict] = []
     total = len(texts)
@@ -256,8 +283,8 @@ def chunk_text(text: str, strategy: str = "fixed", **params) -> list[dict]:
     if strategy == "fixed":
         return chunk_fixed(
             text,
-            size=params.get("size", 512),
-            overlap=params.get("overlap", 100),
+            size=params.get("size", 384),  # tokens, not chars
+            overlap=params.get("overlap", 64),
         )
     elif strategy == "semantic":
         return chunk_semantic(

@@ -34,6 +34,56 @@ def _init_vertex() -> None:
         vertexai.init(project=PROJECT_ID, location=LOCATION)
 
 
+def extract_query_from_drive_url(document_url: str) -> str:
+    """
+    Extract a retrieval-optimized text query from a Google Drive document URL.
+
+    Flow:
+      1. Extract raw text content from the Drive document.
+      2. If the text is short (< 1500 chars), use it directly.
+         If long, ask Gemini Flash to produce a ~150-word thematic summary
+         that captures the document's key topics and entities.
+      3. Return the summary/text — caller passes it to query() as query_text.
+
+    Args:
+        document_url: Full Google Drive URL.
+
+    Returns:
+        A text string suitable as a semantic query.
+        Falls back to the raw URL on extraction failure.
+    """
+    _init_vertex()
+    try:
+        from rag_agent.tools.get_document_content import get_document_content
+        result = get_document_content(document_url)
+        if result.get("status") != "success":
+            return document_url
+
+        text  = result.get("content", "").strip()
+        title = result.get("title", "")
+        if not text:
+            return title or document_url
+
+        if len(text) <= 1500:
+            return f"{title}\n{text}" if title else text
+
+        # Long document → summarise with Gemini Flash
+        from vertexai.generative_models import GenerativeModel
+        model = GenerativeModel("gemini-2.0-flash-001")
+        prompt = (
+            f"Voici le contenu d'un document intitulé « {title} ».\n\n"
+            f"{text[:8000]}\n\n"
+            "Résume en 150 mots maximum les thèmes principaux, entités clés "
+            "(noms de clients, projets, technologies) et sujets abordés. "
+            "Ne commence pas par « Ce document » — donne directement les thèmes."
+        )
+        response = model.generate_content(prompt)
+        summary  = response.text.strip() if hasattr(response, "text") else ""
+        return summary if summary else text[:1500]
+    except Exception:
+        return document_url
+
+
 def list_corpora() -> list[dict]:
     """
     Return all available Vertex AI RAG corpora.

@@ -8,6 +8,7 @@ from .tools.delete_corpus import delete_corpus
 from .tools.list_corpora import list_corpora
 from .tools.rag_query import rag_query
 from .tools.get_document_content import get_document_content
+from .tools.vertex_find_similar import vertex_find_similar
 from .config import MODEL
 from hybrid.config import DRIVE_ROOT_FOLDER
 
@@ -31,6 +32,7 @@ root_agent = Agent(
         delete_corpus,
         list_corpora,
         get_document_content,
+        vertex_find_similar,
         hybrid_create_index,
         hybrid_add_data,
         hybrid_query,
@@ -54,7 +56,7 @@ root_agent = Agent(
     ### Quand l'utiliser
     - Ingestion massive de documents (des dizaines de dossiers Drive)
     - Recherche globale sans besoin d'isolation par client
-    - L'utilisateur parle de "corpus" ou ne précise pas de pipeline
+    - L'utilisateur parle de "corpus" ou ne précise pas de pipeline et ne mentionne aucun client ou index
 
     ### Outils Vertex
     - Créer un corpus → `create_corpus`
@@ -108,19 +110,32 @@ root_agent = Agent(
       nécessaire, l'auto-résolution s'en charge en interne.
     - Le routing single/multi est géré automatiquement par le code
 
-    ### Outils Hybrid — Similarité documentaire
+    ### Similarité documentaire — URL Drive détectée
 
-    **RÈGLE ABSOLUE** : si le message de l'utilisateur contient une URL
+    **RÈGLE ABSOLUE** : si le message contient une URL Drive
     (https://drive.google.com/..., https://docs.google.com/..., tout lien Drive),
-    utiliser OBLIGATOIREMENT `hybrid_find_similar` et JAMAIS `hybrid_query`.
+    utiliser **UNIQUEMENT** les outils de similarité — **JAMAIS** `hybrid_query` ni `rag_query`.
+    Ne pas passer une URL dans `hybrid_query` ou `rag_query` — ils ne savent pas traiter des URLs Drive.
 
-    - L'utilisateur fournit un lien Drive → `hybrid_find_similar(document_url="...", index_names=[...])`
-    - Si `index_names` n'est pas précisé, appeler `hybrid_list_indexes()` pour les obtenir
-      et passer tous les index disponibles.
-    - Déclencheurs : "similaire à", "proche de", "ressemble à", "documents comme ce fichier"
-    - Ce tool extrait le contenu du document, l'encode en vecteur et cherche
-      par similarité cosinus — pas de query texte, pas de rewriter.
-    - Ne JAMAIS passer une URL dans `hybrid_query` — le rewriter la détruira.
+    Déclencheurs : "similaire à", "proche de", "ressemble à", "documents comme ce fichier", ou tout message contenant un lien Drive.
+
+    #### Quel outil choisir ?
+
+    | Contexte | Outil |
+    |---|---|
+    | L'utilisateur précise "hybrid" ou un index | `hybrid_find_similar(document_url="...", index_names=[...])` |
+    | L'utilisateur précise "vertex" ou un corpus | `vertex_find_similar(corpus_name="...", document_url="...")` |
+    | Aucun pipeline précisé → **défaut** | `hybrid_find_similar` (similarité vectorielle pure, plus précise) |
+    | L'utilisateur veut les deux | Appeler les deux outils et présenter les deux résultats |
+
+    #### `hybrid_find_similar`
+    - Encode le document en vecteur (moyenne des chunks) et compare directement par cosinus
+    - Toujours appeler avec `index_names=[]` — le tool récupère automatiquement tous les index disponibles
+    - Ne **jamais** appeler `hybrid_list_indexes` avant, ne **jamais** passer un sous-ensemble d'index
+
+    #### `vertex_find_similar`
+    - Extrait le texte, le résume si besoin, puis passe ce texte comme query au corpus Vertex
+    - Si `corpus_name` n'est pas précisé, appeler `list_corpora()` pour obtenir le premier disponible
 
     ---
 
@@ -135,9 +150,12 @@ root_agent = Agent(
     | "interroge le corpus [nom]" | Vertex AI — appeler list_corpora d'abord si le nom n'est pas donné |
     | "interroge l'index hybrid celio" | Hybrid |
     | "compare celio et fnac" | Hybrid (index_names=["celio","fnac"]) |
-    | Question générale sans client précis | Hybrid — `hybrid_query(index_names=[], ...)` directement, sans appeler `hybrid_list_indexes` avant |
+    | Question générale sans client ni index précisé | Vertex AI — `rag_query` (corpus global) |
+    | "tous les index", "l'ensemble des index", "tous les clients" | Hybrid — `hybrid_query(index_names=[], ...)` (interroge tous les index locaux) |
     | "liste le drive", "contenu du drive", "quels dossiers", "quels clients dans le drive" (sans dossier précisé) | `hybrid_list_drive(folder_name="{DRIVE_ROOT_FOLDER}")` — **ne jamais demander de précision, utiliser toujours ce dossier** |
-    | Message contient une URL drive.google.com ou docs.google.com | `hybrid_find_similar` — **JAMAIS** `hybrid_query` |
+    | Message contient une URL Drive + pipeline non précisé | `hybrid_find_similar` (défaut) |
+    | Message contient une URL Drive + "vertex" / corpus précisé | `vertex_find_similar` |
+    | Message contient une URL Drive + "les deux" | Appeler `hybrid_find_similar` ET `vertex_find_similar` |
     | Ambiguïté pipeline Vertex vs Hybrid → demander à l'utilisateur | — |
 
     ---

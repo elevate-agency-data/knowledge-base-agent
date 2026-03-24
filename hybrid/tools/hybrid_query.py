@@ -62,6 +62,20 @@ def hybrid_query(
     """
     index_names = [n.strip().lower() for n in (index_names or []) if n.strip()]
 
+    # ── Validate index names when explicitly provided ─────────────────────────
+    if index_names:
+        from hybrid.tools.hybrid_list_indexes import hybrid_list_indexes
+        available = [i["index_name"] for i in hybrid_list_indexes().get("indexes", [])]
+        unknown = [n for n in index_names if n not in available]
+        if unknown:
+            return {
+                "status":  "error",
+                "message": (
+                    f"Index inconnu : {', '.join(unknown)}. "
+                    f"Index disponibles : {', '.join(available) if available else 'aucun'}."
+                ),
+            }
+
     # ── Safety net: redirect Drive URLs to hybrid_find_similar ────────────────
     url_match = _DRIVE_URL_RE.search(query)
     if url_match:

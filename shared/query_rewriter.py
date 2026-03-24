@@ -17,6 +17,7 @@ Model choice:
 """
 
 from vertexai.generative_models import GenerativeModel
+from shared.gemini_retry import generate_with_retry
 
 _REWRITER_MODEL = "gemini-2.0-flash-001"
 
@@ -82,7 +83,7 @@ def rewrite_query(user_query: str, context: str = "") -> str:
             model_name=_REWRITER_MODEL,
             system_instruction=_SYSTEM_PROMPT,
         )
-        response = model.generate_content(prompt)
+        response = generate_with_retry(model, prompt)
         rewritten = response.text.strip()
         print(f"rewritten query : {rewritten}")
         return rewritten if rewritten else user_query

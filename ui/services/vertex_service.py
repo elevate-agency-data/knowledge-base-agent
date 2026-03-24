@@ -84,6 +84,89 @@ def extract_query_from_drive_url(document_url: str) -> str:
         return document_url
 
 
+def find_similar(corpus_name: str, document_url: str) -> dict:
+    """
+    Find documents similar to a Google Drive document in a Vertex AI RAG corpus.
+
+    Flow:
+      1. Extract text content from the Drive document.
+      2. Use that text as a retrieval query against the Vertex RAG corpus
+         (pure retrieval — no LLM generation).
+      3. Deduplicate results by URI and return a ranked list of similar docs.
+
+    Args:
+        corpus_name:  Display name or resource name of the Vertex corpus.
+        document_url: Full Google Drive URL of the source document.
+
+    Returns:
+        Dict with keys:
+        - status          : "success" | "error"
+        - source_document : Echo of document_url
+        - corpus_name     : Echo of corpus_name
+        - results         : List of {title, uri, score} dicts, ranked by score
+        - total_results   : Number of unique documents found
+        - elapsed_s       : Wall-clock time in seconds
+    """
+    _init_vertex()
+    from vertexai import rag
+    from rag_agent.config import DEFAULT_TOP_K, DEFAULT_DISTANCE_THRESHOLD
+    from rag_agent.tools.utils import get_corpus_resource_name
+
+    t0 = time.perf_counter()
+    try:
+        doc_query = extract_query_from_drive_url(document_url)
+        if not doc_query or doc_query == document_url:
+            return {
+                "status":    "error",
+                "message":   "Impossible d'extraire le contenu du document.",
+                "elapsed_s": round(time.perf_counter() - t0, 2),
+            }
+
+        corpus_resource_name = get_corpus_resource_name(corpus_name)
+
+        response = rag.retrieval_query(
+            rag_resources=[rag.RagResource(rag_corpus=corpus_resource_name)],
+            text=doc_query,
+            rag_retrieval_config=rag.RagRetrievalConfig(
+                top_k=DEFAULT_TOP_K,
+                filter=rag.utils.resources.Filter(
+                    vector_distance_threshold=DEFAULT_DISTANCE_THRESHOLD
+                ),
+            ),
+        )
+
+        # Deduplicate by URI, keep highest score per document
+        seen: dict[str, dict] = {}
+        for chunk in response.contexts.contexts:
+            uri   = getattr(chunk, "source_uri",   None) or ""
+            title = getattr(chunk, "source_display_name", None) or "Document sans titre"
+            score = float(getattr(chunk, "score", 0.0))
+            if uri and uri != document_url:
+                if uri not in seen or score > seen[uri]["score"]:
+                    seen[uri] = {"title": title, "uri": uri, "score": round(score, 4)}
+
+        results = sorted(seen.values(), key=lambda x: x["score"], reverse=True)
+
+        return {
+            "status":          "success",
+            "source_document": document_url,
+            "corpus_name":     corpus_name,
+            "results":         results,
+            "total_results":   len(results),
+            "elapsed_s":       round(time.perf_counter() - t0, 2),
+        }
+
+    except Exception as exc:
+        return {
+            "status":          "error",
+            "message":         str(exc),
+            "source_document": document_url,
+            "corpus_name":     corpus_name,
+            "results":         [],
+            "elapsed_s":       round(time.perf_counter() - t0, 2),
+        }
+
+
 def list_corpora() -> list[dict]:
     """
     Return all available Vertex AI RAG corpora.
@@ -195,7 +278,8 @@ def synthesize_from_context(
             "internes fournis. Ne complète pas avec ta connaissance générale."
         )
 
-        response = model.generate_content("\n\n".join(parts))
+        from shared.gemini_retry import generate_with_retry
+        response = generate_with_retry(model, "\n\n".join(parts))
         return {
             "status":    "success",
             "answer":    response.text if hasattr(response, "text") else "",

@@ -68,6 +68,7 @@ def _generate_answer(query: str, context: str) -> str:
         return ""
     try:
         from vertexai.generative_models import GenerativeModel
+        from shared.gemini_retry import generate_with_retry
         prompt = (
             "Tu es l'assistant interne d'Elevate, société de conseil en Data & Analytics. "
             "Réponds EXCLUSIVEMENT à partir des documents internes Elevate fournis ci-dessous "
@@ -78,7 +79,7 @@ def _generate_answer(query: str, context: str) -> str:
             f"Question : {query}\n\n"
             "Réponse :"
         )
-        return GenerativeModel("gemini-2.0-flash-001").generate_content(prompt).text
+        return generate_with_retry(GenerativeModel("gemini-2.0-flash-001"), prompt).text
     except Exception as exc:
         return f"_(Erreur de génération : {exc})_"
 
@@ -268,15 +269,32 @@ st.divider()
 
 # ── Render helpers ────────────────────────────────────────────────────────────
 
-from components.source_card import render_sources, render_chunks
+from components.source_card  import render_sources, render_chunks
+from components.chat_message import render_error_message as _render_err
+
+
+def _show_error(message: str) -> None:
+    """Show error or rate-limit warning depending on error type."""
+    if "429" in message or "RESOURCE_EXHAUSTED" in message:
+        st.warning(
+            "Le service est momentanément surchargé (quota API dépassé). "
+            "Veuillez réessayer dans quelques secondes."
+        )
+    else:
+        st.error(message)
 from services.session_store import append_entry
 
 
-def _fn_badge_vertex(corpus: str) -> None:
+def _fn_badge_vertex(corpus: str, is_drive_url: bool = False) -> None:
+    label = (
+        f'vertex_find_similar(corpus="{corpus}")'
+        if is_drive_url
+        else f'rag_query(corpus="{corpus}")'
+    )
     st.markdown(
         f"<span style='background:{VERTEX_COLOR}22;color:{VERTEX_COLOR};"
         f"padding:3px 8px;border-radius:4px;font-size:0.8em;font-family:monospace'>"
-        f"rag_query(corpus=\"{corpus}\")"
+        f"{label}"
         f"</span>",
         unsafe_allow_html=True,
     )
@@ -298,18 +316,36 @@ def _fn_badge_hybrid(fn_name: str, indexes: list[str]) -> None:
     )
 
 
-def _render_vertex(result: dict) -> None:
+def _render_vertex(result: dict, is_drive_url: bool = False) -> None:
     corpus_name = result.get("corpus_name", "")
     if corpus_name:
-        _fn_badge_vertex(corpus_name)
+        _fn_badge_vertex(corpus_name, is_drive_url=is_drive_url)
         st.write("")
     if result.get("status") == "skipped":
         st.caption("_Corpus non sélectionné_")
         return
     if result.get("status") == "error":
-        st.error(result.get("message", "Erreur"))
+        _show_error(result.get("message", "Erreur"))
         return
-    st.caption(f"{result.get('elapsed_s', '?')}s")
+
+    elapsed = result.get("elapsed_s", "?")
+
+    # Drive URL → résultats de similarité (pas de réponse générée)
+    if is_drive_url:
+        similar = result.get("results", [])
+        st.caption(f"{elapsed}s · {len(similar)} documents")
+        if not similar:
+            st.info("Aucun document similaire trouvé.")
+            return
+        lines = []
+        for r in similar:
+            url  = r.get("uri", "")
+            name = r.get("title", url)
+            lines.append(f"- [{name}]({url})")
+        st.markdown("\n".join(lines))
+        return
+
+    st.caption(f"{elapsed}s")
     st.markdown(result.get("answer") or "_Aucune réponse générée._")
     st.divider()
     render_sources(result.get("sources", []), pipeline="vertex")
@@ -323,7 +359,7 @@ def _render_hybrid_mono(result: dict, indexes_used: list[str]) -> None:
         st.caption("_Aucun index sélectionné_")
         return
     if result.get("status") == "error":
-        st.error(result.get("message", "Erreur"))
+        _show_error(result.get("message", "Erreur"))
         return
     retrieval_s    = result.get("elapsed_retrieval_s", result.get("elapsed_s", "?"))
     total_s        = result.get("elapsed_s", "?")
@@ -344,6 +380,43 @@ def _render_hybrid_mono(result: dict, indexes_used: list[str]) -> None:
         render_chunks(result.get("chunks", []))
 
 
+def _render_hybrid_similar(result: dict, indexes_used: list[str]) -> None:
+    """Render hybrid_find_similar results (Drive URL similarity search)."""
+    idx_str = ", ".join(f'"{i}"' for i in indexes_used)
+    st.markdown(
+        f"<span style='background:{HYBRID_COLOR}22;color:{HYBRID_COLOR};"
+        f"padding:3px 8px;border-radius:4px;font-size:0.8em;font-family:monospace'>"
+        f"hybrid_find_similar(index_names=[{idx_str}])"
+        f"</span>",
+        unsafe_allow_html=True,
+    )
+    st.write("")
+    if result.get("status") == "error":
+        _show_error(result.get("message", "Erreur"))
+        return
+    elapsed = result.get("elapsed_s", "?")
+    similar = result.get("results", [])
+    st.caption(f"{elapsed}s · {len(similar)} documents · {len(indexes_used)} index")
+
+    # Résumé du document source
+    doc_summary = result.get("doc_summary", "")
+    if doc_summary:
+        st.markdown(doc_summary)
+        st.divider()
+
+    if not similar:
+        st.info("Aucun document similaire trouvé.")
+        return
+    lines = []
+    for r in similar:
+        score = round(r.get("score", 0) * 100, 1)
+        url   = r.get("source_url", "")
+        name  = r.get("file_name", url)
+        idx   = r.get("index_name", "")
+        lines.append(f"- [{name}]({url}) · `{idx}` · {score}%")
+    st.markdown("\n".join(lines))
+
+
 def _render_hybrid_multi(result: dict, indexes_used: list[str]) -> None:
     if indexes_used:
         _fn_badge_hybrid("hybrid_multi_query", indexes_used)
@@ -352,7 +425,7 @@ def _render_hybrid_multi(result: dict, indexes_used: list[str]) -> None:
         st.caption("_Aucun index disponible_")
         return
     if result.get("status") == "error":
-        st.error(result.get("message", "Erreur"))
+        _show_error(result.get("message", "Erreur"))
         return
     empty          = result.get("indexes_empty", [])
     total          = result.get("total_results", 0)
@@ -388,9 +461,11 @@ def _render_entry(entry: dict) -> None:
     st.markdown(f"**{entry['query']}**")
     c_v, c_h = st.columns(2)
     with c_v:
-        _render_vertex(entry["vertex"])
+        _render_vertex(entry["vertex"], is_drive_url=entry.get("is_drive_url", False))
     with c_h:
-        if entry.get("hybrid_mode") == "multi":
+        if entry.get("is_drive_url"):
+            _render_hybrid_similar(entry["hybrid"], entry.get("indexes_used", []))
+        elif entry.get("hybrid_mode") == "multi":
             _render_hybrid_multi(entry["hybrid"], entry.get("indexes_used", []))
         else:
             _render_hybrid_mono(entry["hybrid"], entry.get("indexes_used", []))
@@ -451,6 +526,9 @@ if query_input:
     conv_context_vertex = _build_context_vertex(history)
     conv_context_hybrid = _build_context_hybrid(history)
 
+    # ── Drive URL detection (used by both placeholder and pipeline logic) ────
+    _drive_url_match = _DRIVE_URL_RE.search(query_input)
+
     # ── Step 1: resolve indexes (fast, avant l'exécution lourde) ─────────────
     resolved: list[str] = []
     if all_indexes:
@@ -467,22 +545,27 @@ if query_input:
         v_ph.info(f"Vertex en cours… `{corpus}`")
 
     with col_h:
-        fn_label = "hybrid_multi_query" if hybrid_mode == "multi" else "hybrid_rag_query"
+        if _drive_url_match:
+            fn_label = "hybrid_find_similar"
+        elif hybrid_mode == "multi":
+            fn_label = "hybrid_multi_query"
+        else:
+            fn_label = "hybrid_rag_query"
         h_ph = st.empty()
         h_ph.info(f"`{fn_label}` en cours…")
 
     # ── Step 3: pipeline functions ────────────────────────────────────────────
-
-    _drive_url_match = _DRIVE_URL_RE.search(query_input)
 
     def _run_vertex():
         if not corpus:
             return {"status": "skipped", "answer": "", "sources": [],
                     "elapsed_s": 0, "corpus_name": ""}
         if _drive_url_match:
-            from services.vertex_service import extract_query_from_drive_url, query as vq
-            doc_query = extract_query_from_drive_url(_drive_url_match.group(0))
-            return vq(corpus, doc_query, context=conv_context_vertex)
+            from services.vertex_service import find_similar as vertex_find_similar
+            return vertex_find_similar(
+                corpus_name=corpus,
+                document_url=_drive_url_match.group(0),
+            )
         from services.vertex_service import query as vq
         return vq(corpus, query_input, context=conv_context_vertex)
 
@@ -490,20 +573,39 @@ if query_input:
         import time
         t0 = time.perf_counter()
 
-        # Drive URL → similarité documentaire vectorielle
+        # Drive URL → similarité documentaire vectorielle + résumé du doc source
         if _drive_url_match:
             from hybrid.tools.hybrid_find_similar import hybrid_find_similar
+            from hybrid.ingestion.extractor import extract_from_url
+            from hybrid.config import SERVICE_ACCOUNT_PATH
+
+            # Extraction du texte pour le résumé Gemini
+            doc_summary = ""
+            try:
+                from googleapiclient.discovery import build
+                from google.oauth2 import service_account
+                creds = service_account.Credentials.from_service_account_file(
+                    SERVICE_ACCOUNT_PATH,
+                    scopes=["https://www.googleapis.com/auth/drive.readonly"],
+                )
+                drive_service = build("drive", "v3", credentials=creds)
+                doc_text = extract_from_url(_drive_url_match.group(0), drive_service)
+                if doc_text:
+                    doc_summary = _generate_answer(
+                        "Résume ce document en 3-5 phrases : de quoi parle-t-il, "
+                        "quel est son objectif, qui sont les parties impliquées ?",
+                        doc_text[:6000],
+                    )
+            except Exception:
+                pass
+
             result = hybrid_find_similar(
                 document_url=_drive_url_match.group(0),
                 index_names=resolved or all_indexes,
             )
             result["elapsed_s"] = round(time.perf_counter() - t0, 2)
             if result.get("status") == "success":
-                result["generated_answer"] = (
-                    "Documents trouvés par similarité vectorielle "
-                    f"(distance cosinus sur {len(result.get('results', []))} fichiers)."
-                )
-                # Normalise sources pour l'affichage
+                result["doc_summary"] = doc_summary
                 result["sources"] = [
                     {"file_name": r["file_name"], "source_url": r["source_url"]}
                     for r in result.get("results", [])
@@ -542,17 +644,23 @@ if query_input:
         }
 
         for future in concurrent.futures.as_completed(futures):
-            which  = futures[future]
-            result = future.result()
+            which = futures[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                result = {"status": "error", "message": str(exc), "sources": [],
+                          "elapsed_s": 0, "corpus_name": corpus}
 
             if which == "vertex":
                 vertex_result = result
                 with v_ph.container():
-                    _render_vertex(result)
+                    _render_vertex(result, is_drive_url=bool(_drive_url_match))
             else:
                 hybrid_result = result
                 with h_ph.container():
-                    if hybrid_mode == "multi":
+                    if _drive_url_match:
+                        _render_hybrid_similar(result, resolved or all_indexes)
+                    elif hybrid_mode == "multi":
                         _render_hybrid_multi(result, resolved)
                     else:
                         _render_hybrid_mono(result, resolved)
@@ -565,6 +673,7 @@ if query_input:
         "hybrid":       hybrid_result,
         "hybrid_mode":  hybrid_mode,
         "indexes_used": resolved,
+        "is_drive_url": bool(_drive_url_match),
     }
     st.session_state.cmp_active_session = append_entry(active_cmp, new_entry)
     _refresh_sessions_list()

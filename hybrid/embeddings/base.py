@@ -62,3 +62,16 @@ class BaseEmbedding(ABC):
         Returns:
             Model name string as stored in chunk metadata.
         """
+
+    @abstractmethod
+    def get_max_seq_length(self) -> int:
+        """
+        Return the maximum input sequence length in tokens.
+
+        Used by the chunker to guarantee every chunk fits in the model's
+        context window.  Must match the value reported by the underlying
+        SentenceTransformer (``model.max_seq_length``).
+
+        Returns:
+            Maximum number of tokens the model can process per input.
+        """

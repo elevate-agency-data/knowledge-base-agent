@@ -24,12 +24,7 @@ def list_indexes() -> list[dict]:
         from hybrid.tools.hybrid_list_indexes import hybrid_list_indexes
         result = hybrid_list_indexes()
         if result.get("status") == "success":
-            indexes = result.get("indexes", [])
-            # Normalise: tool returns "name", UI expects "index_name"
-            for idx in indexes:
-                if "index_name" not in idx and "name" in idx:
-                    idx["index_name"] = idx["name"]
-            return indexes
+            return result.get("indexes", [])
         return []
     except Exception:
         return []
@@ -41,12 +36,10 @@ def get_index_info(index_name: str) -> dict:
     return hybrid_index_info(index_name)
 
 
-def create_index(index_name: str, embedding_model: str = "mpnet-768",
-                 chunk_strategy: str = "fixed") -> dict:
+def create_index(index_name: str, chunk_strategy: str = "fixed") -> dict:
     from hybrid.tools.hybrid_create_index import hybrid_create_index
     return hybrid_create_index(
         index_name=index_name,
-        embedding_model=embedding_model,
         chunk_strategy=chunk_strategy,
     )
 
@@ -134,14 +127,12 @@ def list_drive_folder(folder_name: str) -> dict:
 
 
 def add_data(index_name: str, folder_names: list[str],
-             embedding_model: str = "mpnet-768",
              chunk_strategy: str = "fixed",
              max_files: int = 0) -> dict:
     from hybrid.tools.hybrid_add_data import hybrid_add_data
     return hybrid_add_data(
         index_name=index_name,
         folder_names=folder_names,
-        embedding_model=embedding_model,
         chunk_strategy=chunk_strategy,
         max_files=max_files,
     )

@@ -167,7 +167,7 @@ else:
 # ── Chat history ──────────────────────────────────────────────────────────────
 
 from components.chat_message import render_user_message, render_error_message
-from components.source_card  import render_sources
+from components.source_card  import render_sources, render_chunks
 
 for msg in st.session_state.sc_messages:
     if msg["role"] == "user":
@@ -177,11 +177,15 @@ for msg in st.session_state.sc_messages:
         with st.chat_message("assistant"):
             st.markdown(msg["text"])
             sources  = msg.get("sources", [])
+            chunks   = msg.get("chunks", [])
             pipeline = msg.get("pipeline", "hybrid")
             elapsed  = msg.get("elapsed_s")
             if sources:
                 with st.expander(f"Sources ({len(sources)})", expanded=False):
                     render_sources(sources, pipeline=pipeline)
+            if chunks:
+                with st.expander(f"Citations ({len(chunks)} chunks)", expanded=False):
+                    render_chunks(chunks)
             if elapsed is not None:
                 st.caption(f"{elapsed}s")
 
@@ -242,43 +246,76 @@ if user_input:
             # ── Vertex AI RAG ─────────────────────────────────────────────────
             elif st.session_state.sc_pipeline == _PIPELINE_VERTEX:
                 import re as _re
-                from services.vertex_service import query as vertex_query
                 _drive_url = _re.search(
                     r"https?://(?:drive|docs)\.google\.com/\S+", user_input, _re.IGNORECASE
                 )
+
                 if _drive_url:
-                    from services.vertex_service import extract_query_from_drive_url
-                    query_text = extract_query_from_drive_url(_drive_url.group(0))
+                    # Drive URL → similarité documentaire via Vertex
+                    from services.vertex_service import find_similar as vertex_find_similar
+                    result = vertex_find_similar(
+                        corpus_name=st.session_state.sc_corpus,
+                        document_url=_drive_url.group(0),
+                    )
+
+                    if result.get("status") == "error":
+                        raise RuntimeError(result.get("message", "Erreur Vertex find_similar"))
+
+                    similar = result.get("results", [])
+                    elapsed = result.get("elapsed_s")
+                    answer  = f"Voici les **{len(similar)} documents** les plus similaires (Vertex AI RAG) :"
+
+                    with st.chat_message("assistant"):
+                        st.markdown(answer)
+                        if similar:
+                            lines = []
+                            for r in similar:
+                                url  = r.get("uri", "")
+                                name = r.get("title", url)
+                                lines.append(f"- [{name}]({url})")
+                            st.markdown("\n".join(lines))
+                        if elapsed is not None:
+                            st.caption(f"{elapsed}s · vertex_find_similar · corpus {st.session_state.sc_corpus}")
+
+                    sources = [{"title": r["title"], "uri": r["uri"]} for r in similar]
+                    st.session_state.sc_messages.append({
+                        "role":      "assistant",
+                        "text":      answer,
+                        "sources":   sources,
+                        "pipeline":  "vertex",
+                        "elapsed_s": elapsed,
+                    })
+
                 else:
-                    query_text = user_input
-                result = vertex_query(
-                    corpus_name=st.session_state.sc_corpus,
-                    query_text=query_text,
-                    context=context,
-                )
+                    from services.vertex_service import query as vertex_query
+                    result = vertex_query(
+                        corpus_name=st.session_state.sc_corpus,
+                        query_text=user_input,
+                        context=context,
+                    )
 
-                if result.get("status") == "error":
-                    raise RuntimeError(result.get("message", "Erreur Vertex"))
+                    if result.get("status") == "error":
+                        raise RuntimeError(result.get("message", "Erreur Vertex"))
 
-                answer  = result.get("answer", "")
-                sources = result.get("sources", [])
-                elapsed = result.get("elapsed_s")
+                    answer  = result.get("answer", "")
+                    sources = result.get("sources", [])
+                    elapsed = result.get("elapsed_s")
 
-                with st.chat_message("assistant"):
-                    st.markdown(answer)
-                    if sources:
-                        with st.expander(f"Sources ({len(sources)})", expanded=False):
-                            render_sources(sources, pipeline="vertex")
-                    if elapsed is not None:
-                        st.caption(f"{elapsed}s")
+                    with st.chat_message("assistant"):
+                        st.markdown(answer)
+                        if sources:
+                            with st.expander(f"Sources ({len(sources)})", expanded=False):
+                                render_sources(sources, pipeline="vertex")
+                        if elapsed is not None:
+                            st.caption(f"{elapsed}s")
 
-                st.session_state.sc_messages.append({
-                    "role":      "assistant",
-                    "text":      answer,
-                    "sources":   sources,
-                    "pipeline":  "vertex",
-                    "elapsed_s": elapsed,
-                })
+                    st.session_state.sc_messages.append({
+                        "role":      "assistant",
+                        "text":      answer,
+                        "sources":   sources,
+                        "pipeline":  "vertex",
+                        "elapsed_s": elapsed,
+                    })
 
             # ── Hybrid RAG — résolution automatique des index ─────────────────
             else:
@@ -372,6 +409,11 @@ if user_input:
 
                     answer  = synth.get("answer", "")
                     sources = retrieval.get("sources", [])
+                    # single-index → flat chunks list; multi-index → flatten results_by_index
+                    chunks  = retrieval.get("chunks") or [
+                        c for cs in retrieval.get("results_by_index", {}).values()
+                        for c in cs
+                    ]
                     elapsed = round(time.perf_counter() - t0, 2)
                     index_label = (
                         target_indexes[0]
@@ -385,6 +427,9 @@ if user_input:
                         if sources:
                             with st.expander(f"Sources ({len(sources)})", expanded=False):
                                 render_sources(sources, pipeline="hybrid")
+                        if chunks:
+                            with st.expander(f"Citations ({len(chunks)} chunks)", expanded=False):
+                                render_chunks(chunks)
                         caption = f"{elapsed}s · {index_label}"
                         if retrieval_query and retrieval_query != user_input:
                             caption += f" · query : _{retrieval_query}_"
@@ -394,6 +439,7 @@ if user_input:
                         "role":      "assistant",
                         "text":      answer,
                         "sources":   sources,
+                        "chunks":    chunks,
                         "pipeline":  "hybrid",
                         "elapsed_s": elapsed,
                     })

@@ -42,4 +42,10 @@ def render_assistant_message(
 def render_error_message(message: str) -> None:
     """Render an inline error notice inside the chat flow."""
     with st.chat_message("assistant"):
-        st.error(f"**Erreur** : {message}")
+        if "429" in message or "RESOURCE_EXHAUSTED" in message:
+            st.warning(
+                "Le service est momentanément surchargé (quota API dépassé). "
+                "Veuillez réessayer dans quelques secondes."
+            )
+        else:
+            st.error(f"**Erreur** : {message}")

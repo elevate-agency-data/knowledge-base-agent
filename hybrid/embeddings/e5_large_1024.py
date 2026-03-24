@@ -10,6 +10,7 @@ from .base import BaseEmbedding
 
 _MODEL_ID = "intfloat/multilingual-e5-large"
 _DIMENSION = 1024
+_MAX_SEQ_LENGTH = 512
 _QUERY_PREFIX = "query: "
 _PASSAGE_PREFIX = "passage: "
 
@@ -74,3 +75,7 @@ class E5LargeEmbedding(BaseEmbedding):
     def get_model_name(self) -> str:
         """Return the HuggingFace model identifier."""
         return _MODEL_ID
+
+    def get_max_seq_length(self) -> int:
+        """Return max input tokens: 512."""
+        return _MAX_SEQ_LENGTH

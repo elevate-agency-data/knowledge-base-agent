@@ -11,6 +11,7 @@ Usage::
 from .base import BaseEmbedding
 from .minilm_384 import MiniLMEmbedding
 from .mpnet_768 import MPNetEmbedding
+from .e5_base_768 import E5BaseEmbedding
 from .e5_large_1024 import E5LargeEmbedding
 from .bge_m3 import BGEM3Embedding
 from .vertex_embedding import VertexEmbedding
@@ -18,6 +19,7 @@ from .vertex_embedding import VertexEmbedding
 _REGISTRY: dict[str, type[BaseEmbedding]] = {
     "minilm-384": MiniLMEmbedding,
     "mpnet-768": MPNetEmbedding,
+    "e5-base-768": E5BaseEmbedding,
     "e5-large-1024": E5LargeEmbedding,
     "bge-m3": BGEM3Embedding,
     "vertex": VertexEmbedding,
@@ -52,6 +54,7 @@ __all__ = [
     "BaseEmbedding",
     "MiniLMEmbedding",
     "MPNetEmbedding",
+    "E5BaseEmbedding",
     "E5LargeEmbedding",
     "BGEM3Embedding",
     "VertexEmbedding",

@@ -10,6 +10,7 @@ from .base import BaseEmbedding
 
 _MODEL_ID = "BAAI/bge-m3"
 _DIMENSION = 1024
+_MAX_SEQ_LENGTH = 8192
 
 
 class BGEM3Embedding(BaseEmbedding):
@@ -88,6 +89,10 @@ class BGEM3Embedding(BaseEmbedding):
     def get_model_name(self) -> str:
         """Return the HuggingFace model identifier."""
         return _MODEL_ID
+
+    def get_max_seq_length(self) -> int:
+        """Return max input tokens: 8192."""
+        return _MAX_SEQ_LENGTH
 
     # ------------------------------------------------------------------
     # BGE-M3 specific — dense + sparse in one call

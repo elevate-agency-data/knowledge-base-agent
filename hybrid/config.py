@@ -36,8 +36,8 @@ ALLOYDB_CONNECTION_STRING: str = ""  # e.g. "postgresql://user:pass@host:5432/db
 # ---------------------------------------------------------------------------
 # Chunking
 # ---------------------------------------------------------------------------
-CHUNK_SIZE: int = 384        # in tokens (= mpnet-768 max_seq_length)
-CHUNK_OVERLAP: int = 64     # in tokens
+CHUNK_SIZE: int = 0          # 0 = auto from model max_seq_length (e5-base-768: 512 tokens)
+CHUNK_OVERLAP: int = 32     # in tokens
 SEMANTIC_BREAKPOINT_THRESHOLD: float = 0.85
 PARENT_CHUNK_SIZE: int = 1024
 CHILD_CHUNK_SIZE: int = 256
@@ -45,7 +45,14 @@ CHILD_CHUNK_SIZE: int = 256
 # ---------------------------------------------------------------------------
 # Embeddings
 # ---------------------------------------------------------------------------
-DEFAULT_EMBEDDING_MODEL: str = "mpnet-768"  # bge-m3 requiert FlagEmbedding compatible avec transformers>=4.46
+# Available models (key → dim / max_seq_length / notes):
+#   "minilm-384"     384 dim   128 tokens   lightweight, fast
+#   "mpnet-768"      768 dim   128 tokens   multilingual, small context
+#   "e5-base-768"    768 dim   512 tokens   multilingual FR/EN, recommended
+#   "e5-large-1024" 1024 dim   512 tokens   best quality, heavy (~1.3 GB)
+#   "bge-m3"        1024 dim  8192 tokens   dense+sparse, heaviest (~2 GB)
+#   "vertex"         768 dim  2048 tokens   cloud-only (GCP)
+DEFAULT_EMBEDDING_MODEL: str = "e5-base-768"
 VERTEX_EMBEDDING_MODEL: str = "publishers/google/models/text-embedding-005"
 EMBEDDING_REQUESTS_PER_MIN: int = 1000
 

@@ -17,4 +17,4 @@ DEFAULT_TOP_K = 10
 DEFAULT_DISTANCE_THRESHOLD = 0.5
 DEFAULT_EMBEDDING_MODEL = "publishers/google/models/text-embedding-005"
 DEFAULT_EMBEDDING_REQUESTS_PER_MIN = 1000
-MODEL = "gemini-2.5-pro"
+MODEL = "gemini-2.5-flash"#gemini-2.5-pro #gemini-2.5-flash 

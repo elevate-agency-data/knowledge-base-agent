@@ -41,7 +41,6 @@ _MAX_FILE_CHARS = 500_000  # ~100 pages
 def hybrid_add_data(
     index_name: str,
     folder_names: list[str],
-    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     chunk_strategy: str = "fixed",
     max_files: int = 0,
 ) -> dict:
@@ -90,6 +89,8 @@ def hybrid_add_data(
         - ``embedding_model``   : Model used
         - ``chunk_strategy``    : Strategy used
     """
+    embedding_model = DEFAULT_EMBEDDING_MODEL  # always use configured default
+
     index_name = index_name.strip().lower()
     if not index_name:
         return {"status": "error", "message": "index_name is required."}
@@ -227,7 +228,13 @@ def hybrid_add_data(
                     )
                     continue
 
-                print(f"[hybrid_add_data]      Chunked → {len(chunks)} chunks | Embedding…")
+                # Detect language and domain ONCE on the full document text
+                from hybrid.ingestion.metadata import detect_language, detect_domaine
+                _sample = text[:5000]
+                doc_language = detect_language(_sample)
+                doc_domaine  = detect_domaine(_sample, file_info.get("file_name", ""))
+
+                print(f"[hybrid_add_data]      Chunked → {len(chunks)} chunks | {doc_domaine}/{doc_language} | Embedding…")
 
                 # 3. Embed in batches of 64 to limit memory pressure
                 texts = [c["content"] for c in chunks]
@@ -242,6 +249,8 @@ def hybrid_add_data(
                         embedding_model=embedding_model,
                         index_name=index_name,
                         embedding_dim=emb_dim,
+                        doc_language=doc_language,
+                        doc_domaine=doc_domaine,
                     )
                     meta["embedding"] = embedding
                     records.append(meta)

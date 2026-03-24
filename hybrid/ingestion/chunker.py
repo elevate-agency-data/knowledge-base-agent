@@ -32,39 +32,65 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 
-_TOKENIZER_NAME = "sentence-transformers/all-mpnet-base-v2"
-_tokenizer_cache = None
+_tokenizer_cache = {}
 
 
-def _get_tokenizer():
-    """Lazy-load and cache the HuggingFace tokenizer for mpnet-768."""
-    global _tokenizer_cache
-    if _tokenizer_cache is None:
+def _get_embedding_info() -> tuple[str, int]:
+    """
+    Return (model_hf_id, max_seq_length) for the configured default model.
+
+    Reads from the embedding class constants — does NOT load the model weights.
+    """
+    from hybrid.config import DEFAULT_EMBEDDING_MODEL
+    from hybrid.embeddings import get_embedding_model
+    model = get_embedding_model(DEFAULT_EMBEDDING_MODEL)
+    return model.get_model_name(), model.get_max_seq_length()
+
+
+def _get_tokenizer(model_id: str = ""):
+    """
+    Lazy-load and cache the HuggingFace tokenizer for the embedding model.
+
+    If *model_id* is empty, uses the default from hybrid/config.py.
+    """
+    if not model_id:
+        model_id, _ = _get_embedding_info()
+
+    if model_id not in _tokenizer_cache:
         from transformers import AutoTokenizer
-        _tokenizer_cache = AutoTokenizer.from_pretrained(_TOKENIZER_NAME)
-    return _tokenizer_cache
+        tok = AutoTokenizer.from_pretrained(model_id)
+        # Disable the "sequence too long" warning: we tokenise full docs
+        # intentionally to split them into chunks, not to run them through
+        # the model directly.
+        tok.model_max_length = 10_000_000
+        _tokenizer_cache[model_id] = tok
+    return _tokenizer_cache[model_id]
 
 
-def chunk_fixed(text: str, size: int = 384, overlap: int = 64) -> list[dict]:
+def chunk_fixed(text: str, size: int = 0, overlap: int = 16) -> list[dict]:
     """
     Split *text* into fixed-size overlapping chunks measured in **tokens**.
 
-    Uses the HuggingFace tokenizer for mpnet-768 directly:
+    Uses the HuggingFace tokenizer of the actual embedding model:
       1. Tokenize the full text into token IDs.
       2. Slide a window of *size* tokens with *overlap* stride.
       3. Decode each window back to text.
 
-    This guarantees every chunk fits within the embedding model's context
-    window (384 tokens for all-mpnet-base-v2) — no approximation.
+    If *size* is 0 (default), it is set to the embedding model's
+    ``max_seq_length`` — guaranteeing every chunk fits in the model's
+    context window with zero waste.
 
     Args:
         text:    Source text to split.
-        size:    Target chunk size in **tokens** (default 380, mpnet max = 384).
+        size:    Target chunk size in **tokens** (0 = auto from model).
         overlap: Overlap between consecutive chunks in **tokens**.
 
     Returns:
         List of chunk dicts.
     """
+    if size <= 0:
+        _, max_seq = _get_embedding_info()
+        size = max_seq - 2  # margin for tokenizer encode/decode rounding
     if not text or not text.strip():
         return []
 
@@ -283,8 +309,8 @@ def chunk_text(text: str, strategy: str = "fixed", **params) -> list[dict]:
     if strategy == "fixed":
         return chunk_fixed(
             text,
-            size=params.get("size", 384),  # tokens, not chars
-            overlap=params.get("overlap", 64),
+            size=params.get("size", 0),     # 0 = auto from model max_seq_length
+            overlap=params.get("overlap", 16),
         )
     elif strategy == "semantic":
         return chunk_semantic(

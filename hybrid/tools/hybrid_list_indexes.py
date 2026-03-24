@@ -75,7 +75,7 @@ def hybrid_list_indexes() -> dict:
         indexes = []
         for row in rows:
             indexes.append({
-                "name":            row[0],
+                "index_name":      row[0],
                 "embedding_model": row[1],
                 "chunk_strategy":  row[2],
                 "created_at":      str(row[3]) if row[3] else "",

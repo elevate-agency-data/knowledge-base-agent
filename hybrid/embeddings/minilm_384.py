@@ -10,6 +10,7 @@ from .base import BaseEmbedding
 
 _MODEL_ID = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 _DIMENSION = 384
+_MAX_SEQ_LENGTH = 128
 
 
 class MiniLMEmbedding(BaseEmbedding):
@@ -65,3 +66,7 @@ class MiniLMEmbedding(BaseEmbedding):
     def get_model_name(self) -> str:
         """Return the HuggingFace model identifier."""
         return _MODEL_ID
+
+    def get_max_seq_length(self) -> int:
+        """Return max input tokens: 128."""
+        return _MAX_SEQ_LENGTH

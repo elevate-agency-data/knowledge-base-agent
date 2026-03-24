@@ -17,7 +17,6 @@ from hybrid.stores import get_store
 
 def hybrid_create_index(
     index_name: str,
-    embedding_model: str = DEFAULT_EMBEDDING_MODEL,
     chunk_strategy: str = "fixed",
 ) -> dict:
     """
@@ -27,14 +26,14 @@ def hybrid_create_index(
     records the configuration used.  Idempotent — safe to call multiple
     times for the same index.
 
+    The embedding model is always read from ``hybrid/config.py``
+    (``DEFAULT_EMBEDDING_MODEL``) and cannot be overridden per call —
+    all indexes in the same store must use the same model dimension.
+
     Args:
         index_name:      Logical name for the index (e.g. ``"hr-docs-v1"``).
                          Must be non-empty and contain only alphanumeric
                          characters, hyphens, or underscores.
-        embedding_model: Embedding model to use for this index.
-                         One of: ``"minilm-384"``, ``"mpnet-768"``,
-                         ``"e5-large-1024"``, ``"bge-m3"``, ``"vertex"``.
-                         Defaults to the value in ``hybrid/config.py``.
         chunk_strategy:  Chunking strategy: ``"fixed"``, ``"semantic"``,
                          or ``"hierarchical"``.  Defaults to ``"fixed"``.
 
@@ -48,6 +47,8 @@ def hybrid_create_index(
         - ``store_backend``  : ``"duckdb"`` or ``"alloydb"``
         - ``environment``    : Current ENV value
     """
+    embedding_model = DEFAULT_EMBEDDING_MODEL  # always use configured default
+
     # -- Normalise index name to lowercase ------------------------------------
     index_name = index_name.strip().lower()
 
@@ -65,16 +66,6 @@ def hybrid_create_index(
             "message": (
                 f"Invalid index_name '{index_name}'. "
                 "Use only letters, digits, hyphens, and underscores."
-            ),
-        }
-
-    valid_models = {"minilm-384", "mpnet-768", "e5-large-1024", "bge-m3", "vertex"}
-    if embedding_model not in valid_models:
-        return {
-            "status":  "error",
-            "message": (
-                f"Unknown embedding_model '{embedding_model}'. "
-                f"Supported: {sorted(valid_models)}"
             ),
         }
 

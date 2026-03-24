@@ -17,6 +17,7 @@ from hybrid.config import (
 
 _MODEL_ID = VERTEX_EMBEDDING_MODEL
 _DIMENSION = 768
+_MAX_SEQ_LENGTH = 2048
 
 
 class VertexEmbedding(BaseEmbedding):
@@ -126,3 +127,7 @@ class VertexEmbedding(BaseEmbedding):
     def get_model_name(self) -> str:
         """Return the Vertex AI model resource path."""
         return _MODEL_ID
+
+    def get_max_seq_length(self) -> int:
+        """Return max input tokens: 2048."""
+        return _MAX_SEQ_LENGTH

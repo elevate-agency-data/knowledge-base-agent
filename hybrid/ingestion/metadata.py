@@ -152,6 +152,8 @@ def build_metadata(
     embedding_model: str,
     index_name: str = "",
     embedding_dim: int = 0,
+    doc_language: str = "",
+    doc_domaine: str = "",
 ) -> dict:
     """
     Assemble the full metadata dict for a chunk ready to be inserted.
@@ -165,14 +167,16 @@ def build_metadata(
         embedding_model: Model identifier string (e.g. ``"bge-m3"``).
         index_name:      Logical index name for the chunk.
         embedding_dim:   Dimension of the embedding vector.
+        doc_language:    Pre-detected document-level language (skips per-chunk detection).
+        doc_domaine:     Pre-detected document-level domain (skips per-chunk detection).
 
     Returns:
         Complete chunk metadata dict, ready for ``store.insert_chunks()``.
     """
     content = chunk.get("content", "")
 
-    lang = detect_language(content)
-    domain = detect_domaine(content, file_info.get("file_name", ""))
+    lang = doc_language or detect_language(content)
+    domain = doc_domaine or detect_domaine(content, file_info.get("file_name", ""))
     tags = extract_tags(content)
 
     # Parse ISO dates to date-only strings (YYYY-MM-DD)

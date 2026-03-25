@@ -114,11 +114,11 @@ with st.sidebar:
 
     st.divider()
     st.markdown("**Raccourcis**")
-    st.code("liste les index hybrid")
-    st.code("crée un index hybrid [nom]")
+    st.code("liste les notions")
+    st.code("crée un index [nom]")
     st.code("ajoute le dossier [X] dans l'index [Y]")
-    st.code("interroge l'index [nom] : [question]")
-    st.code("compare [client A] et [client B]")
+    st.code("Donne moi les fichiers similaires à ce document : https://drive.google.com/file/d/1q1d5AHjEgKfhOz3mkusT7azTLENStcn5/view?usp=sharing")
+    st.code("compare [Notion A] et [Notion B]")
 
     st.divider()
     if st.button("Actualiser la liste", use_container_width=True):

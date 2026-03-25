@@ -58,10 +58,12 @@ def render_chunks(chunks: list[dict], collapsed: bool = True) -> None:
 
     st.markdown("**Chunks récupérés**")
     for i, chunk in enumerate(chunks):
-        score     = chunk.get("rrf_score") or chunk.get("score", 0)
-        file_name = chunk.get("file_name", f"chunk_{i+1}")
-        content   = chunk.get("content", "")
-        label     = f"#{i+1} — {file_name}  `score: {score:.4f}`"
+        score        = chunk.get("rrf_score") or chunk.get("score", 0)
+        score_dense  = chunk.get("score_dense")
+        score_sparse = chunk.get("score_sparse")
+        file_name    = chunk.get("file_name", f"chunk_{i+1}")
+        content      = chunk.get("content", "")
+        label        = f"#{i+1} — {file_name}  `RRF: {score:.4f}`"
 
         with st.expander(label, expanded=not collapsed):
             col_l, col_r = st.columns([3, 1])
@@ -71,5 +73,10 @@ def render_chunks(chunks: list[dict], collapsed: bool = True) -> None:
                 st.caption(f"**Domaine** : {chunk.get('domaine', '—')}")
                 st.caption(f"**Langue**  : {chunk.get('langue', '—')}")
                 st.caption(f"**Type**    : {chunk.get('file_type', '—')}")
+                st.caption(f"**RRF**     : {score:.4f}")
+                if score_dense is not None:
+                    st.caption(f"**Cosinus** : {score_dense:.4f}")
+                if score_sparse is not None:
+                    st.caption(f"**BM25**    : {score_sparse:.4f}")
                 if chunk.get("source_url"):
                     st.markdown(f"[Ouvrir]({chunk['source_url']})")

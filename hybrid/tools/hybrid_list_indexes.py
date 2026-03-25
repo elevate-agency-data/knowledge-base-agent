@@ -28,43 +28,20 @@ def hybrid_list_indexes() -> dict:
             index_names = store.list_indexes()
             return {
                 "status":  "success",
-                "indexes": [{"name": n} for n in index_names],
+                "indexes": [{"index_name": n} for n in index_names],
                 "total":   len(index_names),
             }
 
         conn = store._get_conn()
 
-        # Ensure metadata table exists
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS hybrid_indexes (
-                index_name      VARCHAR PRIMARY KEY,
-                embedding_model VARCHAR,
-                chunk_strategy  VARCHAR,
-                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-
-        rows = conn.execute("""
-            SELECT
-                i.index_name,
-                i.embedding_model,
-                i.chunk_strategy,
-                i.created_at,
-                COALESCE(c.total_chunks, 0)  AS total_chunks,
-                COALESCE(c.total_files, 0)   AS total_files
-            FROM hybrid_indexes i
-            LEFT JOIN (
-                SELECT
-                    index_name,
-                    COUNT(*)                   AS total_chunks,
-                    COUNT(DISTINCT source_url) AS total_files
-                FROM chunks
-                GROUP BY index_name
-            ) c ON i.index_name = c.index_name
-            ORDER BY i.created_at DESC
+        # Read registry
+        registry_rows = conn.execute("""
+            SELECT index_name, embedding_model, chunk_strategy, created_at
+            FROM hybrid_indexes
+            ORDER BY created_at DESC
         """).fetchall()
 
-        if not rows:
+        if not registry_rows:
             return {
                 "status":  "success",
                 "message": "No indexes found. Create one with hybrid_create_index.",
@@ -73,14 +50,31 @@ def hybrid_list_indexes() -> dict:
             }
 
         indexes = []
-        for row in rows:
+        for row in registry_rows:
+            index_name = row[0]
+            table = store._tbl(index_name)
+
+            # Count chunks and files from the per-index table
+            total_chunks = 0
+            total_files  = 0
+            try:
+                stats = conn.execute(f"""
+                    SELECT COUNT(*), COUNT(DISTINCT source_url)
+                    FROM {table}
+                """).fetchone()
+                if stats:
+                    total_chunks = stats[0] or 0
+                    total_files  = stats[1] or 0
+            except Exception:
+                pass  # Table may not exist yet (empty index)
+
             indexes.append({
-                "index_name":      row[0],
+                "index_name":      index_name,
                 "embedding_model": row[1],
                 "chunk_strategy":  row[2],
                 "created_at":      str(row[3]) if row[3] else "",
-                "total_chunks":    row[4],
-                "total_files":     row[5],
+                "total_chunks":    total_chunks,
+                "total_files":     total_files,
             })
 
         return {

@@ -11,6 +11,7 @@ from hybrid.stores.base import BaseStore
 def sparse_search(
     query: str,
     store: BaseStore,
+    index_name: str = "",
     top_k: int = 10,
     filters: dict | None = None,
 ) -> list[dict]:
@@ -22,10 +23,11 @@ def sparse_search(
     2. Normalise raw BM25 scores to [0, 1].
 
     Args:
-        query:   Raw query string (no preprocessing needed).
-        store:   Initialised store backend.
-        top_k:   Number of results to return.
-        filters: Optional metadata filters forwarded to the store.
+        query:      Raw query string (no preprocessing needed).
+        store:      Initialised store backend.
+        index_name: Index to search (routes to dedicated table).
+        top_k:      Number of results to return.
+        filters:    Optional metadata filters (langue, domaine, …).
 
     Returns:
         List of chunk dicts, each with a ``"score"`` key in [0, 1].
@@ -33,8 +35,9 @@ def sparse_search(
     """
     filters = filters or {}
 
-    # 1. BM25 search via the store backend
+    # 1. BM25 search via the store backend — routed to index_name's table
     results = store.sparse_search(
+        index_name=index_name,
         query=query,
         top_k=top_k,
         filters=filters,

@@ -1,24 +1,20 @@
 """
-DuckDB-backed store for local development.
+DuckDB-backed store — one table per index.
 
-Stores chunk embeddings in a local .duckdb file and supports:
-- Dense search via HNSW index (DuckDB VSS) — O(log n), ~50x faster than NumPy
-- Sparse search via DuckDB's built-in FTS (BM25)
-- Full metadata filtering
+Each logical index gets its own ``chunks_{name}`` table with a dedicated
+HNSW vector index and FTS index.  This guarantees:
+- HNSW is used at 100% for dense search (no cross-index pollution)
+- No post-filtering by index_name — table routing handles isolation
+- DROP TABLE for instant index deletion (vs DELETE with full scan)
 
-No external services required — works completely offline.
-
-Embedding schema: FLOAT[768] — fixed-size array required by HNSW.
-Default model: mpnet-768 (768 dimensions). Changing the embedding model
-requires recreating the store with the matching EMBEDDING_DIM constant.
-
-Performance tiers (dense search):
-- Primary  → array_cosine_similarity + HNSW index (VSS) — O(log n), ~50x faster
-- Fallback → list_cosine_similarity SQL full scan (if VSS unavailable)
+Performance tiers (dense search, in order):
+- Primary    → array_cosine_distance ORDER BY + HNSW — O(log n) ANN
+- Secondary  → array_cosine_similarity full scan — O(n)
 - Last resort → NumPy vectorised cosine similarity
 """
 
 import os
+import re
 from typing import Optional
 
 import numpy as np
@@ -26,7 +22,6 @@ import numpy as np
 from .base import BaseStore
 
 # Embedding vector dimension — must match DEFAULT_EMBEDDING_MODEL in hybrid/config.py
-# mpnet-768 → 768 | minilm-384 → 384 | e5-large-1024 → 1024
 EMBEDDING_DIM: int = 768
 
 _CREATE_INDEXES_TABLE_SQL = """
@@ -38,12 +33,12 @@ CREATE TABLE IF NOT EXISTS hybrid_indexes (
 )
 """
 
-_CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS chunks (
+_CHUNK_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS {table} (
     id              VARCHAR PRIMARY KEY,
     index_name      VARCHAR,
     content         TEXT,
-    embedding       FLOAT[768],
+    embedding       FLOAT[{dim}],
     source_url      VARCHAR,
     file_name       VARCHAR,
     file_type       VARCHAR,
@@ -62,29 +57,27 @@ CREATE TABLE IF NOT EXISTS chunks (
 )
 """
 
-_INSERT_SQL = """
-INSERT OR REPLACE INTO chunks VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-)
-"""
+_INSERT_SQL = "INSERT OR REPLACE INTO {table} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+
+
+def _sanitize(name: str) -> str:
+    """Convert an index_name to a safe SQL identifier suffix."""
+    safe = re.sub(r"[^a-z0-9_]", "_", name.lower()).strip("_")
+    return safe or "default"
 
 
 class DuckDBStore(BaseStore):
     """
     Hybrid store backed by a local DuckDB file.
 
-    Dense retrieval is computed with NumPy cosine similarity (suitable for
-    local/dev workloads up to ~100 k chunks).  Sparse retrieval uses
-    DuckDB's FTS extension (BM25).
+    One table per index: ``chunks_{index_name}``.
+    Each table has its own HNSW vector index and FTS index.
 
     Args:
-        db_path: Path to the ``.duckdb`` file.  Created automatically if
-                 the directory exists; parent directories are created on
-                 ``initialize()``.
+        db_path: Path to the ``.duckdb`` file.
     """
 
     def __init__(self, db_path: str) -> None:
-        """Set up the store with the given file path."""
         self.db_path = db_path
         self._conn = None
         self._vss_available = False
@@ -94,13 +87,7 @@ class DuckDBStore(BaseStore):
     # ------------------------------------------------------------------
 
     def _get_conn(self):
-        """
-        Return (and lazily create) the DuckDB connection.
-
-        Creates parent directories, loads the FTS extension, and ensures
-        both tables (hybrid_indexes and chunks) exist on every connection so
-        that tools like hybrid_list_indexes never fail on an empty database.
-        """
+        """Lazily create the DuckDB connection and load extensions."""
         if self._conn is None:
             import duckdb
 
@@ -109,7 +96,7 @@ class DuckDBStore(BaseStore):
                 self.db_path,
                 config={"hnsw_enable_experimental_persistence": True},
             )
-            # Load FTS extension — LOAD only (already installed)
+            # FTS extension
             try:
                 self._conn.execute("LOAD fts")
             except Exception:
@@ -118,7 +105,7 @@ class DuckDBStore(BaseStore):
                     self._conn.execute("LOAD fts")
                 except Exception:
                     pass
-            # Load VSS extension for HNSW — LOAD only (already installed)
+            # VSS extension (HNSW)
             try:
                 self._conn.execute("LOAD vss")
                 self._vss_available = True
@@ -129,39 +116,90 @@ class DuckDBStore(BaseStore):
                     self._vss_available = True
                 except Exception:
                     self._vss_available = False
-            # Ensure schema exists — idempotent, safe on every connection
+            # Registry table only — chunk tables are created per-index in initialize()
             self._conn.execute(_CREATE_INDEXES_TABLE_SQL)
-            self._conn.execute(_CREATE_TABLE_SQL)
-            # Ensure HNSW index exists — create only if absent, no rebuild
-            self._ensure_hnsw()
         return self._conn
 
-    def _build_where(
-        self, filters: dict, prefix: str = ""
-    ) -> tuple[str, list]:
+    def _tbl(self, index_name: str) -> str:
+        """Return the SQL table name for this index."""
+        return f"chunks_{_sanitize(index_name)}"
+
+    def _hnsw_idx(self, index_name: str) -> str:
+        """Return the HNSW index name for this index."""
+        return f"{self._tbl(index_name)}_hnsw_idx"
+
+    def _rebuild_fts(self, index_name: str) -> None:
+        """Rebuild the FTS index for this index's table (non-fatal)."""
+        table = self._tbl(index_name)
+        try:
+            self._conn.execute(
+                f"PRAGMA create_fts_index('{table}', 'id', 'content', overwrite=1)"
+            )
+        except Exception:
+            pass
+
+    def _ensure_hnsw(self, index_name: str) -> None:
+        """Create the HNSW index if it does not already exist (non-fatal)."""
+        if not self._vss_available:
+            return
+        table = self._tbl(index_name)
+        idx = self._hnsw_idx(index_name)
+        try:
+            exists = self._conn.execute(
+                f"SELECT COUNT(*) FROM duckdb_indexes() WHERE index_name='{idx}'"
+            ).fetchone()[0]
+            if exists:
+                return
+            count = self._conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE embedding IS NOT NULL"
+            ).fetchone()[0]
+            if count == 0:
+                return
+            self._conn.execute(
+                f"CREATE INDEX {idx} ON {table} USING HNSW (embedding) WITH (metric='cosine')"
+            )
+        except Exception:
+            pass
+
+    def _rebuild_hnsw(self, index_name: str) -> None:
         """
-        Translate a filters dict into a SQL WHERE fragment + param list.
+        Drop and recreate the HNSW index after data changes.
 
-        Args:
-            filters: Dict with optional keys: index_name, file_type,
-                     domaine, langue, author, date_from, date_to.
-            prefix:  Optional table alias prefix (e.g. ``"c."``).
+        DuckDB VSS does not support incremental HNSW updates — the index
+        must be rebuilt after every insert/delete.
+        """
+        if not self._vss_available:
+            return
+        table = self._tbl(index_name)
+        idx = self._hnsw_idx(index_name)
+        try:
+            count = self._conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE embedding IS NOT NULL"
+            ).fetchone()[0]
+            if count == 0:
+                return
+            self._conn.execute(f"DROP INDEX IF EXISTS {idx}")
+            self._conn.execute(
+                f"CREATE INDEX {idx} ON {table} USING HNSW (embedding) WITH (metric='cosine')"
+            )
+        except Exception:
+            pass
 
-        Returns:
-            Tuple of (clause_string, params_list).  The clause string
-            starts with ``AND`` so it can be appended to an existing WHERE.
+    def _build_where(self, filters: dict, prefix: str = "") -> tuple[str, list]:
+        """
+        Build a SQL WHERE fragment from metadata filters.
+
+        index_name is excluded — table routing handles isolation.
         """
         clauses: list[str] = []
         params: list = []
 
-        mapping = {
-            "index_name": "index_name",
-            "file_type": "file_type",
-            "domaine": "domaine",
-            "langue": "langue",
-            "author": "author",
-        }
-        for key, col in mapping.items():
+        for key, col in (
+            ("file_type", "file_type"),
+            ("domaine",   "domaine"),
+            ("langue",    "langue"),
+            ("author",    "author"),
+        ):
             if filters.get(key):
                 clauses.append(f"AND {prefix}{col} = ?")
                 params.append(filters[key])
@@ -176,69 +214,8 @@ class DuckDBStore(BaseStore):
         return " ".join(clauses), params
 
     def _rows_to_dicts(self, rows, conn) -> list[dict]:
-        """Convert fetchall() rows to list of dicts using cursor description."""
         columns = [d[0] for d in conn.description]
         return [dict(zip(columns, row)) for row in rows]
-
-    def _rebuild_fts(self) -> None:
-        """Rebuild the FTS index after inserts (non-fatal on failure)."""
-        try:
-            self._conn.execute(
-                "PRAGMA create_fts_index('chunks', 'id', 'content', overwrite=1)"
-            )
-        except Exception:
-            pass
-
-    def _ensure_hnsw(self) -> None:
-        """
-        Create the HNSW index if it does not already exist.
-
-        Called once on connection startup — no-op when the index is present.
-        Non-fatal: silently skipped if VSS is unavailable or the table is empty.
-        """
-        if not self._vss_available:
-            return
-        try:
-            exists = self._conn.execute(
-                "SELECT COUNT(*) FROM duckdb_indexes() WHERE index_name='chunks_hnsw_idx'"
-            ).fetchone()[0]
-            if exists:
-                return
-            count = self._conn.execute(
-                "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL"
-            ).fetchone()[0]
-            if count == 0:
-                return
-            self._conn.execute(
-                "CREATE INDEX chunks_hnsw_idx ON chunks "
-                "USING HNSW (embedding) WITH (metric='cosine')"
-            )
-        except Exception:
-            pass
-
-    def _rebuild_hnsw(self) -> None:
-        """
-        Rebuild the HNSW vector index after data changes.
-
-        DuckDB VSS does not support incremental HNSW updates — the index
-        must be dropped and recreated after every insert/delete.
-        Non-fatal: silently skipped if VSS is unavailable or the table is empty.
-        """
-        if not self._vss_available:
-            return
-        try:
-            count = self._conn.execute(
-                "SELECT COUNT(*) FROM chunks WHERE embedding IS NOT NULL"
-            ).fetchone()[0]
-            if count == 0:
-                return
-            self._conn.execute("DROP INDEX IF EXISTS chunks_hnsw_idx")
-            self._conn.execute(
-                "CREATE INDEX chunks_hnsw_idx ON chunks "
-                "USING HNSW (embedding) WITH (metric='cosine')"
-            )
-        except Exception:
-            pass
 
     # ------------------------------------------------------------------
     # BaseStore interface
@@ -246,39 +223,37 @@ class DuckDBStore(BaseStore):
 
     def initialize(self, index_name: str, embedding_model: str = "", chunk_strategy: str = "") -> None:
         """
-        Create the chunks table, metadata table, and FTS index if they do not exist.
-        Registers the index in hybrid_indexes so it appears in list_indexes() even when empty.
-
+        Create the per-index table, FTS index, and HNSW index if absent.
         Idempotent — safe to call multiple times.
-
-        Args:
-            index_name:      Logical index name (stored in chunk metadata).
-            embedding_model: Model used for this index (stored in metadata).
-            chunk_strategy:  Chunking strategy used (stored in metadata).
         """
         conn = self._get_conn()
-        conn.execute(_CREATE_INDEXES_TABLE_SQL)
-        conn.execute(_CREATE_TABLE_SQL)
-        # Register the index (INSERT OR IGNORE so idempotent)
+        table = self._tbl(index_name)
+        conn.execute(_CHUNK_TABLE_SQL.format(table=table, dim=EMBEDDING_DIM))
         conn.execute(
             "INSERT OR IGNORE INTO hybrid_indexes (index_name, embedding_model, chunk_strategy) VALUES (?, ?, ?)",
             [index_name, embedding_model, chunk_strategy],
         )
-        self._rebuild_fts()
-        self._rebuild_hnsw()
+        self._rebuild_fts(index_name)
+        self._rebuild_hnsw(index_name)
 
     def insert_chunks(self, chunks: list[dict]) -> None:
         """
-        Bulk-insert chunk dicts into the store.
-
-        Args:
-            chunks: List of chunk dicts with all required fields.
+        Bulk-insert chunks into their respective per-index tables.
+        Rebuilds FTS and HNSW for each affected index after insert.
         """
         conn = self._get_conn()
+
+        # Group by index_name so we rebuild indexes once per index
+        from collections import defaultdict
+        by_index: dict[str, list] = defaultdict(list)
         for chunk in chunks:
-            conn.execute(
-                _INSERT_SQL,
-                [
+            by_index[chunk["index_name"]].append(chunk)
+
+        for index_name, index_chunks in by_index.items():
+            table = self._tbl(index_name)
+            sql = _INSERT_SQL.format(table=table)
+            for chunk in index_chunks:
+                conn.execute(sql, [
                     chunk["id"],
                     chunk["index_name"],
                     chunk["content"],
@@ -298,13 +273,13 @@ class DuckDBStore(BaseStore):
                     chunk.get("parent_chunk_id"),
                     chunk.get("embedding_model", ""),
                     chunk.get("embedding_dim", 0),
-                ],
-            )
-        self._rebuild_fts()
-        self._rebuild_hnsw()
+                ])
+            self._rebuild_fts(index_name)
+            self._rebuild_hnsw(index_name)
 
     def dense_search(
         self,
+        index_name: str,
         embedding: list[float],
         top_k: int,
         filters: Optional[dict] = None,
@@ -312,31 +287,45 @@ class DuckDBStore(BaseStore):
         """
         Return the *top_k* most similar chunks using cosine similarity.
 
-        Strategy (in order of preference):
-        1. ``list_cosine_similarity`` SQL — computation stays inside DuckDB,
-           2-3x faster than Python/NumPy (no row serialisation overhead).
-        2. NumPy vectorised fallback — fetches all embeddings as a matrix
-           and scores with a single dot-product (used if SQL function fails).
+        Queries only ``chunks_{index_name}`` — no cross-index scan.
+        HNSW is triggered at 100% (no WHERE index_name filter to bypass it).
 
-        Args:
-            embedding: Query vector.
-            top_k:     Number of results to return.
-            filters:   Metadata filters dict.
-
-        Returns:
-            List of chunk dicts with an added ``"score"`` key.
+        Strategy (in order):
+        1. HNSW ANN via array_cosine_distance ORDER BY — O(log n)
+        2. array_cosine_similarity full scan — O(n)
+        3. NumPy vectorised fallback
         """
         conn = self._get_conn()
+        table = self._tbl(index_name)
         filters = filters or {}
         where_clause, params = self._build_where(filters)
 
-        # ── Primary path: array_cosine_similarity + HNSW (VSS) ───────────
+        # ── Primary: HNSW ANN — O(log n) ──────────────────────────────────
+        if self._vss_available:
+            self._ensure_hnsw(index_name)
+            try:
+                sql = f"""
+                    SELECT *, (1.0 - array_cosine_distance(
+                        embedding, ?::FLOAT[{EMBEDDING_DIM}]
+                    )) AS score
+                    FROM {table}
+                    WHERE embedding IS NOT NULL
+                    {where_clause}
+                    ORDER BY array_cosine_distance(embedding, ?::FLOAT[{EMBEDDING_DIM}])
+                    LIMIT ?
+                """
+                rows = conn.execute(sql, [embedding] + params + [embedding, top_k]).fetchall()
+                return self._rows_to_dicts(rows, conn)
+            except Exception:
+                pass
+
+        # ── Secondary: full scan ───────────────────────────────────────────
         try:
             sql = f"""
                 SELECT *, array_cosine_similarity(
                     embedding, ?::FLOAT[{EMBEDDING_DIM}]
                 ) AS score
-                FROM chunks
+                FROM {table}
                 WHERE embedding IS NOT NULL
                 {where_clause}
                 ORDER BY score DESC
@@ -347,27 +336,8 @@ class DuckDBStore(BaseStore):
         except Exception:
             pass
 
-        # ── Secondary path: list_cosine_similarity SQL (no HNSW) ──────────
-        try:
-            sql = f"""
-                SELECT *, list_cosine_similarity(embedding, ?) AS score
-                FROM chunks
-                WHERE embedding IS NOT NULL
-                {where_clause}
-                ORDER BY score DESC
-                LIMIT ?
-            """
-            rows = conn.execute(sql, [embedding] + params + [top_k]).fetchall()
-            return self._rows_to_dicts(rows, conn)
-        except Exception:
-            pass
-
-        # ── Fallback: NumPy vectorised cosine similarity ───────────────────
-        sql = f"""
-            SELECT * FROM chunks
-            WHERE embedding IS NOT NULL
-            {where_clause}
-        """
+        # ── Fallback: NumPy ────────────────────────────────────────────────
+        sql = f"SELECT * FROM {table} WHERE embedding IS NOT NULL {where_clause}"
         rows = conn.execute(sql, params).fetchall()
         columns = [d[0] for d in conn.description]
 
@@ -376,7 +346,6 @@ class DuckDBStore(BaseStore):
 
         emb_col = columns.index("embedding")
         all_dicts = [dict(zip(columns, row)) for row in rows]
-
         query_vec = np.array(embedding, dtype=np.float32)
         matrix    = np.array([row[emb_col] for row in rows], dtype=np.float32)
         norms     = np.linalg.norm(matrix, axis=1)
@@ -393,111 +362,77 @@ class DuckDBStore(BaseStore):
 
     def sparse_search(
         self,
+        index_name: str,
         query: str,
         top_k: int,
         filters: Optional[dict] = None,
     ) -> list[dict]:
         """
-        Return the *top_k* most relevant chunks using DuckDB FTS (BM25).
+        Return the *top_k* most relevant chunks via BM25.
 
-        Falls back to ILIKE pattern matching if the FTS extension is
-        unavailable.
-
-        Args:
-            query:   Full-text query string.
-            top_k:   Number of results to return.
-            filters: Metadata filters dict.
-
-        Returns:
-            List of chunk dicts with an added ``"score"`` key.
+        Queries only ``chunks_{index_name}``.
+        Falls back to ILIKE if FTS is unavailable.
         """
         conn = self._get_conn()
+        table = self._tbl(index_name)
         filters = filters or {}
         where_clause, params = self._build_where(filters, prefix="c.")
 
         try:
             sql = f"""
-                SELECT c.*, fts_main_chunks.match_bm25(c.id, ?) AS score
-                FROM chunks c
+                SELECT c.*, fts_main_{table}.match_bm25(c.id, ?) AS score
+                FROM {table} c
                 WHERE score IS NOT NULL
                 {where_clause}
                 ORDER BY score DESC
                 LIMIT ?
             """
-            full_params = [query] + params + [top_k]
-            rows = conn.execute(sql, full_params).fetchall()
+            rows = conn.execute(sql, [query] + params + [top_k]).fetchall()
             return self._rows_to_dicts(rows, conn)
         except Exception:
             # FTS unavailable — fall back to ILIKE
+            where_no_prefix = where_clause.replace("c.", "")
             sql = f"""
                 SELECT *, 1.0 AS score
-                FROM chunks
+                FROM {table}
                 WHERE content ILIKE ?
-                {where_clause.replace('c.', '')}
+                {where_no_prefix}
                 LIMIT ?
             """
-            fallback_params = [f"%{query}%"] + params + [top_k]
-            rows = conn.execute(sql, fallback_params).fetchall()
+            rows = conn.execute(sql, [f"%{query}%"] + params + [top_k]).fetchall()
             return self._rows_to_dicts(rows, conn)
 
     def delete_chunks_by_file_name(self, file_name: str, index_name: str) -> None:
-        """
-        Delete all chunks for *file_name* within *index_name*.
-
-        Called when a file has been updated so stale chunks are purged
-        before re-ingestion.
-
-        Args:
-            file_name:  Exact file_name stored in the chunks table.
-            index_name: Index to scope the deletion to.
-        """
+        """Delete all chunks for a file within one index, then rebuild indexes."""
         conn = self._get_conn()
-        conn.execute(
-            "DELETE FROM chunks WHERE file_name = ? AND index_name = ?",
-            [file_name, index_name],
-        )
-        self._rebuild_fts()
-        self._rebuild_hnsw()
+        table = self._tbl(index_name)
+        conn.execute(f"DELETE FROM {table} WHERE file_name = ?", [file_name])
+        self._rebuild_fts(index_name)
+        self._rebuild_hnsw(index_name)
 
     def delete_index(self, index_name: str) -> None:
-        """
-        Delete all chunks associated with *index_name*.
-
-        Args:
-            index_name: Index to purge.
-        """
+        """Drop the index table entirely and remove from registry."""
         conn = self._get_conn()
-        conn.execute("DELETE FROM chunks WHERE index_name = ?", [index_name])
-        self._rebuild_fts()
-        self._rebuild_hnsw()
+        table = self._tbl(index_name)
+        conn.execute(f"DROP TABLE IF EXISTS {table}")
+        conn.execute("DELETE FROM hybrid_indexes WHERE index_name = ?", [index_name])
 
     def list_indexes(self) -> list[str]:
-        """
-        Return a sorted list of all distinct index names in the store.
-
-        Returns:
-            Sorted list of index name strings.
-        """
+        """Return all registered index names from the registry table."""
         conn = self._get_conn()
         rows = conn.execute(
-            "SELECT DISTINCT index_name FROM chunks ORDER BY index_name"
+            "SELECT index_name FROM hybrid_indexes ORDER BY index_name"
         ).fetchall()
         return [row[0] for row in rows if row[0]]
 
     def get_chunk_by_id(self, chunk_id: str) -> dict:
-        """
-        Retrieve a single chunk by primary key.
-
-        Args:
-            chunk_id: UUID string.
-
-        Returns:
-            Chunk dict, or ``{}`` if not found.
-        """
+        """Retrieve a chunk by ID, searching across all index tables."""
         conn = self._get_conn()
-        rows = conn.execute(
-            "SELECT * FROM chunks WHERE id = ?", [chunk_id]
-        ).fetchall()
-        if not rows:
-            return {}
-        return self._rows_to_dicts(rows, conn)[0]
+        for index_name in self.list_indexes():
+            table = self._tbl(index_name)
+            rows = conn.execute(
+                f"SELECT * FROM {table} WHERE id = ?", [chunk_id]
+            ).fetchall()
+            if rows:
+                return self._rows_to_dicts(rows, conn)[0]
+        return {}

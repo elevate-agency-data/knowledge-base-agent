@@ -39,7 +39,7 @@ def hybrid_multi_query(
 
     Args:
         index_names:     List of index names to query simultaneously.
-                         Example: ["celio", "fnac", "aldi", "ikks"]
+                         Example: ["rh", "marketing", "juridique", "finance"]
         query:           Natural-language question.
         retrieval_mode:  ``"hybrid"``, ``"dense"``, or ``"sparse"``.
         top_k_per_index: Number of chunks to retrieve per index (default 5).
@@ -84,8 +84,6 @@ def hybrid_multi_query(
     context_sections: list[str] = []
 
     for index_name in index_names:
-        index_filters = {**filters, "index_name": index_name}
-
         try:
             dense_results: list[dict] = []
             sparse_results: list[dict] = []
@@ -95,16 +93,18 @@ def hybrid_multi_query(
                     query=query,
                     store=store,
                     embedding_model=embedder,
+                    index_name=index_name,
                     top_k=top_k_per_index * 2,
-                    filters=index_filters,
+                    filters=filters,
                 )
 
             if retrieval_mode in ("hybrid", "sparse"):
                 sparse_results = sparse_search(
                     query=query,
                     store=store,
+                    index_name=index_name,
                     top_k=top_k_per_index * 2,
-                    filters=index_filters,
+                    filters=filters,
                 )
 
             if retrieval_mode == "hybrid":
@@ -119,7 +119,7 @@ def hybrid_multi_query(
             else:
                 results = sparse_results
 
-            results = apply_post_filter(results, index_filters)[:top_k_per_index]
+            results = apply_post_filter(results, filters)[:top_k_per_index]
 
             if not results:
                 indexes_empty.append(index_name)

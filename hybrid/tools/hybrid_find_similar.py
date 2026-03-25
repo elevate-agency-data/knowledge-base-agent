@@ -42,7 +42,7 @@ def hybrid_find_similar(
                          Supported: Google Docs, Slides, Sheets, PDF.
                          Example: "https://docs.google.com/presentation/d/..."
         index_names:     List of hybrid indexes to search in.
-                         Example: ["celio", "fnac"]
+                         Example: ["rh", "marketing"]
         top_k:           Total number of similar documents to return (default 10).
         embedding_model: Embedding model key (default from config).
                          Should match the model used when indexes were built.
@@ -120,9 +120,10 @@ def hybrid_find_similar(
         all_results: list[dict] = []
         for index_name in index_names:
             raw = store.dense_search(
+                index_name=index_name,
                 embedding=doc_vector,
                 top_k=top_k_per_index,
-                filters={"index_name": index_name},
+                filters={},
             )
             for chunk in raw:
                 chunk["index_name"] = index_name

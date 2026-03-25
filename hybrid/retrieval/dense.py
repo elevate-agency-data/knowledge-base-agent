@@ -13,6 +13,7 @@ def dense_search(
     query: str,
     store: BaseStore,
     embedding_model: BaseEmbedding,
+    index_name: str = "",
     top_k: int = 10,
     filters: dict | None = None,
 ) -> list[dict]:
@@ -21,15 +22,16 @@ def dense_search(
 
     Flow:
     1. Embed the query with *embedding_model*.
-    2. Call ``store.dense_search()`` with the resulting vector.
+    2. Call ``store.dense_search()`` routed to *index_name*'s table.
     3. Normalise raw cosine scores to the [0, 1] range.
 
     Args:
         query:           Raw query string.
         store:           Initialised store backend.
         embedding_model: Model used to embed the query.
+        index_name:      Index to search (routes to dedicated table).
         top_k:           Number of results to return.
-        filters:         Optional metadata filters forwarded to the store.
+        filters:         Optional metadata filters (langue, domaine, …).
 
     Returns:
         List of chunk dicts, each with a ``"score"`` key in [0, 1].
@@ -40,8 +42,9 @@ def dense_search(
     # 1. Embed query
     query_vector = embedding_model.embed_query(query)
 
-    # 2. Store search (returns raw cosine scores in [-1, 1])
+    # 2. Store search — routed to index_name's table, HNSW used at 100%
     results = store.dense_search(
+        index_name=index_name,
         embedding=query_vector,
         top_k=top_k,
         filters=filters,

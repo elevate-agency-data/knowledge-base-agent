@@ -106,8 +106,8 @@ def _matches(chunk: dict, filters: dict) -> bool:
     Returns:
         Boolean match result.
     """
-    # Simple equality filters
-    for field in ("file_type", "domaine", "langue", "author", "index_name"):
+    # Simple equality filters (index_name excluded — handled by table routing)
+    for field in ("file_type", "domaine", "langue", "author"):
         if field in filters:
             if chunk.get(field) != filters[field]:
                 return False

@@ -181,6 +181,7 @@ class AlloyDBStore(BaseStore):
 
     async def _async_dense_search(
         self,
+        index_name: str,
         embedding: list[float],
         top_k: int,
         filters: dict,
@@ -204,6 +205,7 @@ class AlloyDBStore(BaseStore):
 
     async def _async_sparse_search(
         self,
+        index_name: str,
         query: str,
         top_k: int,
         filters: dict,
@@ -344,6 +346,7 @@ class AlloyDBStore(BaseStore):
 
     def dense_search(
         self,
+        index_name: str,
         embedding: list[float],
         top_k: int,
         filters: Optional[dict] = None,
@@ -352,17 +355,20 @@ class AlloyDBStore(BaseStore):
         Return top-k chunks by pgvector cosine similarity.
 
         Args:
-            embedding: Query vector.
-            top_k:     Number of results.
-            filters:   Metadata filters.
+            index_name: Index to search (used as WHERE filter in AlloyDB).
+            embedding:  Query vector.
+            top_k:      Number of results.
+            filters:    Metadata filters.
 
         Returns:
             List of chunk dicts with ``"score"`` key.
         """
-        return self._run(self._async_dense_search(embedding, top_k, filters or {}))
+        merged = {**(filters or {}), "index_name": index_name}
+        return self._run(self._async_dense_search(index_name, embedding, top_k, merged))
 
     def sparse_search(
         self,
+        index_name: str,
         query: str,
         top_k: int,
         filters: Optional[dict] = None,
@@ -371,14 +377,16 @@ class AlloyDBStore(BaseStore):
         Return top-k chunks by PostgreSQL tsvector full-text ranking.
 
         Args:
-            query:   Query text.
-            top_k:   Number of results.
-            filters: Metadata filters.
+            index_name: Index to search (used as WHERE filter in AlloyDB).
+            query:      Query text.
+            top_k:      Number of results.
+            filters:    Metadata filters.
 
         Returns:
             List of chunk dicts with ``"score"`` key.
         """
-        return self._run(self._async_sparse_search(query, top_k, filters or {}))
+        merged = {**(filters or {}), "index_name": index_name}
+        return self._run(self._async_sparse_search(index_name, query, top_k, merged))
 
     def delete_chunks_by_file_name(self, file_name: str, index_name: str) -> None:
         """

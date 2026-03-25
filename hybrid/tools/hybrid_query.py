@@ -29,6 +29,7 @@ def hybrid_query(
     top_k: int = 10,
     filters: dict | None = None,
     context: str = "",
+    retrieval_query: str = "",
 ) -> dict:
     """
     Query one or more hybrid indexes. Routing is handled automatically.
@@ -42,7 +43,7 @@ def hybrid_query(
     Args:
         index_names:    List of index names to query. Pass an empty list or
                         omit to trigger automatic index resolution.
-                        Examples: ["celio"]  |  ["celio", "fnac"]  |  []
+                        Examples: ["rh"]  |  ["rh", "marketing"]  |  []
         query:          Natural-language question or search string.
         retrieval_mode: ``"hybrid"`` (default), ``"dense"``, or ``"sparse"``.
         top_k:          Total number of chunks to return.
@@ -102,7 +103,8 @@ def hybrid_query(
 
         index_names = resolve_indexes(query, available)
 
-    retrieval_query = rewrite_query(query, context=context)
+    if not retrieval_query:
+        retrieval_query = rewrite_query(query, context=context)
 
     if len(index_names) == 1:
         result = hybrid_rag_query(

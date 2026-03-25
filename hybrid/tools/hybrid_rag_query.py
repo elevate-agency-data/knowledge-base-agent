@@ -78,8 +78,6 @@ def hybrid_rag_query(
         }
 
     filters = filters or {}
-    # Always restrict to the requested index
-    filters["index_name"] = index_name
 
     try:
         store = get_store()
@@ -94,6 +92,7 @@ def hybrid_rag_query(
                 query=query,
                 store=store,
                 embedding_model=embedder,
+                index_name=index_name,
                 top_k=top_k * 2,   # Retrieve more for fusion
                 filters=filters,
             )
@@ -106,6 +105,7 @@ def hybrid_rag_query(
             sparse_results = sparse_search(
                 query=query,
                 store=store,
+                index_name=index_name,
                 top_k=top_k * 2,
                 filters=filters,
             )

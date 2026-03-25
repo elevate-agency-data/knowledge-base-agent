@@ -23,14 +23,14 @@ def hybrid_index_info(
 
     Returns:
         Dict with keys:
-        - ``status``        : ``"success"`` or ``"error"``
-        - ``index_name``    : Echo of the index
-        - ``total_chunks``  : Total number of chunks in the index
-        - ``total_files``   : Number of distinct source files
+        - ``status``         : ``"success"`` or ``"error"``
+        - ``index_name``     : Echo of the index
+        - ``total_chunks``   : Total number of chunks in the index
+        - ``total_files``    : Number of distinct source files
         - ``embedding_model``: Model used for this index
-        - ``chunk_strategy``: Chunking strategy used
-        - ``files``         : List of file info dicts, each with:
-                              name, type, chunks, langue, domaine, url
+        - ``chunk_strategy`` : Chunking strategy used
+        - ``files``          : List of file info dicts, each with:
+                               name, type, chunks, langue, domaine, url
     """
     index_name = index_name.strip().lower()
     if not index_name:
@@ -47,39 +47,55 @@ def hybrid_index_info(
             }
 
         conn = store._get_conn()
+        table = store._tbl(index_name)
 
-        # Check index exists
-        try:
-            total = conn.execute(
-                "SELECT COUNT(*) FROM chunks WHERE index_name = ?",
-                [index_name],
-            ).fetchone()
-        except Exception:
+        # Check index exists in registry
+        reg = conn.execute(
+            "SELECT embedding_model, chunk_strategy FROM hybrid_indexes WHERE index_name = ?",
+            [index_name],
+        ).fetchone()
+
+        if not reg:
             return {
                 "status":  "error",
                 "message": f"Index '{index_name}' not found. Run hybrid_create_index first.",
             }
 
-        if not total or total[0] == 0:
+        embedding_model = reg[0]
+        chunk_strategy  = reg[1]
+
+        # Check table exists and has data
+        try:
+            total = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+        except Exception:
             return {
                 "status":     "error",
-                "message":    f"Index '{index_name}' exists but contains no chunks.",
+                "message":    f"Index '{index_name}' table not found. Run hybrid_create_index first.",
                 "index_name": index_name,
             }
 
-        # Global stats
-        stats = conn.execute("""
+        if not total or total[0] == 0:
+            return {
+                "status":          "success",
+                "message":         f"Index '{index_name}' exists but contains no chunks.",
+                "index_name":      index_name,
+                "total_chunks":    0,
+                "total_files":     0,
+                "embedding_model": embedding_model,
+                "chunk_strategy":  chunk_strategy,
+                "files":           [],
+            }
+
+        # Global stats from per-index table
+        stats = conn.execute(f"""
             SELECT
                 COUNT(*)                   AS total_chunks,
-                COUNT(DISTINCT source_url) AS total_files,
-                MAX(embedding_model)       AS embedding_model,
-                MAX(chunk_strategy)        AS chunk_strategy
-            FROM chunks
-            WHERE index_name = ?
-        """, [index_name]).fetchone()
+                COUNT(DISTINCT source_url) AS total_files
+            FROM {table}
+        """).fetchone()
 
         # Per-file breakdown
-        file_rows = conn.execute("""
+        file_rows = conn.execute(f"""
             SELECT
                 file_name,
                 file_type,
@@ -87,30 +103,30 @@ def hybrid_index_info(
                 langue,
                 domaine,
                 COUNT(*) AS chunk_count
-            FROM chunks
-            WHERE index_name = ?
+            FROM {table}
             GROUP BY file_name, file_type, source_url, langue, domaine
             ORDER BY file_name
-        """, [index_name]).fetchall()
+        """).fetchall()
 
-        files = []
-        for row in file_rows:
-            files.append({
-                "name":        row[0],
-                "type":        row[1],
-                "url":         row[2],
-                "langue":      row[3],
-                "domaine":     row[4],
-                "chunks":      row[5],
-            })
+        files = [
+            {
+                "name":    row[0],
+                "type":    row[1],
+                "url":     row[2],
+                "langue":  row[3],
+                "domaine": row[4],
+                "chunks":  row[5],
+            }
+            for row in file_rows
+        ]
 
         return {
             "status":          "success",
             "index_name":      index_name,
             "total_chunks":    stats[0],
             "total_files":     stats[1],
-            "embedding_model": stats[2],
-            "chunk_strategy":  stats[3],
+            "embedding_model": embedding_model,
+            "chunk_strategy":  chunk_strategy,
             "files":           files,
         }
 

@@ -43,6 +43,7 @@ class BaseStore(ABC):
     @abstractmethod
     def dense_search(
         self,
+        index_name: str,
         embedding: list[float],
         top_k: int,
         filters: dict,
@@ -51,18 +52,20 @@ class BaseStore(ABC):
         Return the *top_k* chunks most similar to *embedding* (cosine).
 
         Args:
-            embedding: Query vector produced by an embedding model.
-            top_k:     Maximum number of results to return.
-            filters:   Optional metadata filters (index_name, langue, …).
+            index_name: Index to search — routes to the correct table.
+            embedding:  Query vector produced by an embedding model.
+            top_k:      Maximum number of results to return.
+            filters:    Optional metadata filters (langue, domaine, …).
 
         Returns:
             List of chunk dicts, each augmented with a ``"score"`` key
-            (cosine similarity in [−1, 1], higher is better).
+            (cosine similarity in [0, 1], higher is better).
         """
 
     @abstractmethod
     def sparse_search(
         self,
+        index_name: str,
         query: str,
         top_k: int,
         filters: dict,
@@ -71,9 +74,10 @@ class BaseStore(ABC):
         Return the *top_k* chunks matching *query* via BM25 / full-text.
 
         Args:
-            query:   Raw text query.
-            top_k:   Maximum number of results to return.
-            filters: Optional metadata filters.
+            index_name: Index to search — routes to the correct table.
+            query:      Raw text query.
+            top_k:      Maximum number of results to return.
+            filters:    Optional metadata filters.
 
         Returns:
             List of chunk dicts, each augmented with a ``"score"`` key

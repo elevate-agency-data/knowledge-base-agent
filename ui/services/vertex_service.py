@@ -255,30 +255,20 @@ def synthesize_from_context(
     """
     _init_vertex()
     from vertexai.generative_models import GenerativeModel
-    from rag_agent.config import MODEL
+    from rag_agent.config import MODEL, GENERATION_SYSTEM_PROMPT
+    from shared.gemini_retry import generate_with_retry
 
     t0 = time.perf_counter()
     try:
         model = GenerativeModel(model_name=MODEL)
 
-        parts = [
-            "Tu es l'assistant interne d'Elevate, une société de conseil en Data & Analytics. "
-            "Tu réponds EXCLUSIVEMENT à partir des documents internes fournis ci-dessous "
-            "(propositions commerciales, analyses, offres d'accompagnement rédigées par Elevate "
-            "pour ses clients). "
-            "N'utilise JAMAIS ta connaissance générale sur les entreprises ou les marques. "
-            "Si l'information ne figure pas dans les documents, dis-le clairement."
-        ]
+        parts = [GENERATION_SYSTEM_PROMPT]
         if conversation_context:
             parts.append(f"Historique de la conversation :\n{conversation_context}")
-        parts.append(f"Documents internes Elevate récupérés :\n{rag_context}")
+        parts.append(f"Documents récupérés :\n{rag_context}")
         parts.append(f"Question : {query_text}")
-        parts.append(
-            "Réponds de manière claire et concise en te basant UNIQUEMENT sur les documents "
-            "internes fournis. Ne complète pas avec ta connaissance générale."
-        )
+        parts.append("Réponds de manière claire et concise en te basant UNIQUEMENT sur les documents fournis.")
 
-        from shared.gemini_retry import generate_with_retry
         response = generate_with_retry(model, "\n\n".join(parts))
         return {
             "status":    "success",
@@ -294,7 +284,7 @@ def synthesize_from_context(
         }
 
 
-def query(corpus_name: str, query_text: str, context: str = "") -> dict:
+def query(corpus_name: str, query_text: str, context: str = "", retrieval_query: str = "") -> dict:
     """
     Query a Vertex AI RAG corpus and return a structured result.
 
@@ -313,8 +303,9 @@ def query(corpus_name: str, query_text: str, context: str = "") -> dict:
     _init_vertex()
     from vertexai import rag
     from vertexai.generative_models import GenerativeModel, Tool
-    from rag_agent.config import DEFAULT_TOP_K, DEFAULT_DISTANCE_THRESHOLD, MODEL
+    from rag_agent.config import DEFAULT_TOP_K, DEFAULT_DISTANCE_THRESHOLD
     from rag_agent.tools.utils import get_corpus_resource_name
+    from rag_agent.config import MODEL as GENERATION_MODEL, GENERATION_SYSTEM_PROMPT
 
     t0 = time.perf_counter()
     try:
@@ -333,10 +324,15 @@ def query(corpus_name: str, query_text: str, context: str = "") -> dict:
         rag_retrieval_tool = Tool.from_retrieval(
             retrieval=rag.Retrieval(source=rag_store)
         )
-        from shared.query_rewriter import rewrite_query
-        retrieval_query = rewrite_query(query_text, context=context)
+        if not retrieval_query:
+            from shared.query_rewriter import rewrite_query
+            retrieval_query = rewrite_query(query_text, context=context)
 
-        model = GenerativeModel(model_name=MODEL, tools=[rag_retrieval_tool])
+        model = GenerativeModel(
+            model_name=GENERATION_MODEL,
+            tools=[rag_retrieval_tool],
+            system_instruction=GENERATION_SYSTEM_PROMPT,
+        )
         response = model.generate_content(retrieval_query)
 
         answer = response.text if hasattr(response, "text") else ""

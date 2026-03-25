@@ -17,4 +17,12 @@ DEFAULT_TOP_K = 10
 DEFAULT_DISTANCE_THRESHOLD = 0.5
 DEFAULT_EMBEDDING_MODEL = "publishers/google/models/text-embedding-005"
 DEFAULT_EMBEDDING_REQUESTS_PER_MIN = 1000
-MODEL = "gemini-2.5-flash"#gemini-2.5-pro #gemini-2.5-flash 
+MODEL = "gemini-2.5-flash"  # gemini-2.5-pro | gemini-2.5-flash
+
+# System prompt shared by all pipelines for final answer generation.
+GENERATION_SYSTEM_PROMPT = (
+    "Tu es un assistant interne. "
+    "Réponds EXCLUSIVEMENT à partir des documents fournis. "
+    "N'utilise JAMAIS ta connaissance générale. "
+    "Si l'information ne figure pas dans les documents, dis-le clairement."
+)

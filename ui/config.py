@@ -3,6 +3,11 @@ UI configuration — colors, labels, page metadata.
 All visual constants live here so pages stay free of magic values.
 """
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from rag_agent.config import MODEL as GENERATION_MODEL, GENERATION_SYSTEM_PROMPT
+
 # ── Page meta ─────────────────────────────────────────────────────────────────
 APP_TITLE       = "Knowledge Base Agent"
 APP_ICON        = None

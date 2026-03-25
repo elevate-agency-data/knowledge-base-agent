@@ -295,10 +295,15 @@ class DuckDBStore(BaseStore):
         2. array_cosine_similarity full scan — O(n)
         3. NumPy vectorised fallback
         """
+        from hybrid.config import DENSE_SCORE_THRESHOLD
+
         conn = self._get_conn()
         table = self._tbl(index_name)
         filters = filters or {}
         where_clause, params = self._build_where(filters)
+
+        def _apply_threshold(results: list[dict]) -> list[dict]:
+            return [r for r in results if r.get("score", 0) >= DENSE_SCORE_THRESHOLD]
 
         # ── Primary: HNSW ANN — O(log n) ──────────────────────────────────
         if self._vss_available:
@@ -315,7 +320,7 @@ class DuckDBStore(BaseStore):
                     LIMIT ?
                 """
                 rows = conn.execute(sql, [embedding] + params + [embedding, top_k]).fetchall()
-                return self._rows_to_dicts(rows, conn)
+                return _apply_threshold(self._rows_to_dicts(rows, conn))
             except Exception:
                 pass
 
@@ -332,7 +337,7 @@ class DuckDBStore(BaseStore):
                 LIMIT ?
             """
             rows = conn.execute(sql, [embedding] + params + [top_k]).fetchall()
-            return self._rows_to_dicts(rows, conn)
+            return _apply_threshold(self._rows_to_dicts(rows, conn))
         except Exception:
             pass
 
@@ -358,7 +363,7 @@ class DuckDBStore(BaseStore):
             d["score"] = s
 
         all_dicts.sort(key=lambda x: x["score"], reverse=True)
-        return all_dicts[:top_k]
+        return _apply_threshold(all_dicts[:top_k])
 
     def sparse_search(
         self,

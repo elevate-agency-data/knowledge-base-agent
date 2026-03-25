@@ -43,17 +43,14 @@ def dense_search(
     query_vector = embedding_model.embed_query(query)
 
     # 2. Store search — routed to index_name's table, HNSW used at 100%
-    results = store.dense_search(
+    # Scores are raw cosine similarities [0, 1] — no normalisation needed
+    # since RRF fusion uses rank, not score value.
+    return store.dense_search(
         index_name=index_name,
         embedding=query_vector,
         top_k=top_k,
         filters=filters,
     )
-
-    # 3. Normalise scores to [0, 1]
-    results = _normalise_scores(results)
-
-    return results
 
 
 def _normalise_scores(results: list[dict]) -> list[dict]:

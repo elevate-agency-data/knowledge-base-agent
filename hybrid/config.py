@@ -60,7 +60,8 @@ EMBEDDING_REQUESTS_PER_MIN: int = 1000
 # Retrieval
 # ---------------------------------------------------------------------------
 TOP_K: int = 10
-DISTANCE_THRESHOLD: float = 0.5
+DISTANCE_THRESHOLD: float = 0.5   # legacy — not used
+DENSE_SCORE_THRESHOLD: float = 0.70  # minimum cosine similarity to keep a dense result
 DENSE_WEIGHT: float = 0.7
 SPARSE_WEIGHT: float = 0.3
 RRF_K: int = 60

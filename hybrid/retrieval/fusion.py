@@ -57,8 +57,8 @@ def reciprocal_rank_fusion(
         if chunk_id:
             sparse_index[chunk_id] = (rank, chunk.get("score", 0.0), chunk)
 
-    # Union of all chunk IDs
-    all_ids = set(dense_index.keys()) | set(sparse_index.keys())
+    # Only chunks validated by dense — sparse alone is not enough
+    all_ids = set(dense_index.keys())
 
     scored: list[dict] = []
     for chunk_id in all_ids:

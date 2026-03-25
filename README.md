@@ -171,7 +171,7 @@ Index locaux par dossier, stockés dans DuckDB (schema `FLOAT[768]` + HNSW index
 
 | Outil ADK | Description |
 |---|---|
-| `hybrid_create_index` | Crée un index pour un dossier (ex: "celio") |
+| `hybrid_create_index` | Crée un index pour un domaine (ex: "rh") |
 | `hybrid_add_data` | Ingère des dossiers Drive dans un index (récursif, tous types de fichiers) |
 | `hybrid_query` | Interroge un ou plusieurs index (routing auto single/multi) |
 | `hybrid_find_similar` | Trouve les documents similaires à un lien Drive (vecteur à vecteur) |
@@ -218,11 +218,11 @@ Utilisé par l'outil `hybrid_query`, la page Simple Chat et la page Comparaison 
 Avant chaque retrieval, la query utilisateur est réécrite par `gemini-2.0-flash` pour améliorer la pertinence sémantique.
 
 ```
-Query brute : "compare celio et fnac"
-Query réécrite : "Celio Fnac offres produits services positionnement commercial"
+Query brute : "compare rh et marketing"
+Query réécrite : "RH Marketing politiques procédures différences"
 ```
 
-Le rewriter supprime les verbes d'action et garde les concepts. **Les noms propres (clients, marques, projets) sont toujours conservés** pour éviter de perdre les entités dans l'embedding. Il accepte un paramètre `context` pour résoudre les références conversationnelles. Chaque pipeline (Vertex et Hybrid) reçoit un contexte issu **uniquement de ses propres réponses précédentes** — les contextes ne sont jamais mélangés.
+Le rewriter supprime les verbes d'action et garde les concepts. **Les noms propres (domaines, thématiques, projets) sont toujours conservés** pour éviter de perdre les entités dans l'embedding. Il accepte un paramètre `context` pour résoudre les références conversationnelles. Chaque pipeline (Vertex et Hybrid) reçoit un contexte issu **uniquement de ses propres réponses précédentes** — les contextes ne sont jamais mélangés.
 
 ### Grounding Elevate
 

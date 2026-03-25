@@ -266,8 +266,8 @@ BM25 (Best Match 25) est une évolution de TF-IDF : il pondère les termes par l
 - Documents très techniques avec jargon métier
 
 **Exemple :**
-> Query : *"offre SKU-4872-B Celio"*
-> → Le dense pourrait rater si "SKU-4872-B" n'a pas de sens vectoriel
+> Query : *"procédure onboarding RH"*
+> → Le dense pourrait rater si le terme exact n'a pas de sens vectoriel
 > → Le sparse retrouve les chunks qui contiennent exactement ce terme
 
 **Limite :** Rate les paraphrases et les questions formulées autrement que dans le document.

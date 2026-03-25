@@ -125,7 +125,7 @@ with tab_create:
     with st.form("form_create_index"):
         new_index_name = st.text_input(
             "Nom de l'index",
-            placeholder="celio",
+            placeholder="rh",
             help="Uniquement lettres, chiffres, tirets. Sera normalisé en minuscules.",
         )
         new_model = st.selectbox(

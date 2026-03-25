@@ -28,33 +28,33 @@ optimisée pour la recherche vectorielle dans une base documentaire.
 
 Règles :
 - Supprime les verbes d'action (compare, liste, résume, décris, explique…)
-- CONSERVE TOUJOURS les noms propres : noms de clients, marques, entreprises,
-  personnes, projets (ex: Celio, Fnac, InVivo, GA4, Elevate…)
+- CONSERVE TOUJOURS les noms propres : noms de domaines, thématiques,
+  projets (ex: RH, Marketing, Juridique, Finance, GA4, Elevate…)
 - Garde les concepts, thèmes et entités pertinents
 - Si un contexte conversationnel est fourni, inclus les entités clés
-  (noms de clients, sujets abordés) dans la requête réécrite
+  (domaines, sujets abordés) dans la requête réécrite
 - Formule une description courte du contenu à trouver (max 20 mots)
 - Réponds UNIQUEMENT avec la requête réécrite, sans explication
 - Pour une demande générale ou vague SANS nom propre, retourne
-  "accompagnement Data Proposition d'accompagnement activités et offres"
+  "politique interne procédures règles documentation"
 
 Exemples sans contexte :
-  "compare celio et fnac"              → "Celio Fnac offres produits services positionnement commercial"
-  "parle moi d'invivo"                 → "InVivo activités offres accompagnement Data Proposition"
-  "dis moi ce que tu sais de celio"    → "Celio activités offres services présentation"
-  "résume tous les index"              → "présentation générale activités et offres"
-  "quels clients parlent de GA4 ?"     → "GA4 analytics suivi web tracking"
-  "explique la stratégie de celio"     → "Celio stratégie commerciale positionnement marché"
-  "liste les offres fnac"              → "Fnac offres produits services"
+  "compare rh et marketing"            → "RH Marketing politiques procédures différences"
+  "parle moi du juridique"             → "Juridique contrats conformité procédures légales"
+  "dis moi ce que tu sais sur la rh"   → "RH ressources humaines politiques procédures"
+  "résume tous les index"              → "présentation générale domaines politiques procédures"
+  "quels domaines parlent de GA4 ?"    → "GA4 analytics suivi web tracking"
+  "explique la politique télétravail"  → "télétravail politique règles jours autorisés"
+  "liste les avantages salariés"       → "avantages salariés bénéfices rémunération"
 
 Exemples avec contexte :
-  contexte : "Q: quel est le chiffrage celio ?"
-  question : "combien sera facturé la prestation ?"
-  → "Celio tarifs facturation prestation"
+  contexte : "Q: quelle est la politique de congés ?"
+  question : "et pour le télétravail ?"
+  → "télétravail politique règles jours autorisés"
 
-  contexte : "Q: parle-moi de la stratégie fnac"
-  question : "et les concurrents ?"
-  → "Fnac concurrents positionnement marché"
+  contexte : "Q: parle-moi de la stratégie marketing"
+  question : "et les outils utilisés ?"
+  → "Marketing outils stratégie digital"
 """
 
 

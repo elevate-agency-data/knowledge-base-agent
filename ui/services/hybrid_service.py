@@ -36,7 +36,7 @@ def get_index_info(index_name: str) -> dict:
     return hybrid_index_info(index_name)
 
 
-def create_index(index_name: str, chunk_strategy: str = "fixed") -> dict:
+def create_index(index_name: str, embedding_model: str = "", chunk_strategy: str = "fixed") -> dict:
     from hybrid.tools.hybrid_create_index import hybrid_create_index
     return hybrid_create_index(
         index_name=index_name,
@@ -66,7 +66,7 @@ def resolve_indexes(query: str, available: list[str]) -> list[str]:
 
 def query(index_name: str, query_text: str,
           retrieval_mode: str = "hybrid", top_k: int = 10,
-          context: str = "") -> dict:
+          context: str = "", retrieval_query: str = "") -> dict:
     """
     Query a hybrid index and return a structured result with timing.
 
@@ -90,6 +90,7 @@ def query(index_name: str, query_text: str,
         retrieval_mode=retrieval_mode,
         top_k=top_k,
         context=context,
+        retrieval_query=retrieval_query,
     )
     elapsed = round(time.perf_counter() - t0, 2)
 
@@ -101,7 +102,7 @@ def query(index_name: str, query_text: str,
 
 def multi_query(index_names: list[str], query_text: str,
                 retrieval_mode: str = "hybrid", top_k_per_index: int = 5,
-                context: str = "") -> dict:
+                context: str = "", retrieval_query: str = "") -> dict:
     """Query multiple hybrid indexes simultaneously."""
     from hybrid.tools.hybrid_query import hybrid_query
 
@@ -112,6 +113,7 @@ def multi_query(index_names: list[str], query_text: str,
         retrieval_mode=retrieval_mode,
         top_k=top_k_per_index * len(index_names),
         context=context,
+        retrieval_query=retrieval_query,
     )
     result["elapsed_s"] = round(time.perf_counter() - t0, 2)
     # Alias "context" → "answer" pour cohérence avec query() et vertex_service

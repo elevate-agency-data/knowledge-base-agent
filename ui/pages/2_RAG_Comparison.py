@@ -28,6 +28,7 @@ from config import (
     APP_TITLE, VERTEX_COLOR, HYBRID_COLOR,
     VERTEX_LABEL, HYBRID_LABEL,
     DEFAULT_TOP_K, DEFAULT_RETRIEVAL_MODE, RETRIEVAL_MODES,
+    GENERATION_MODEL, GENERATION_SYSTEM_PROMPT,
 )
 
 st.set_page_config(
@@ -60,7 +61,7 @@ def _load_indexes() -> list[str]:
 
 def _generate_answer(query: str, context: str) -> str:
     """
-    Appelle Gemini Flash pour synthétiser une réponse à partir des chunks.
+    Appelle Gemini pour synthétiser une réponse à partir des chunks.
     Flash est utilisé ici (et non Pro) pour éviter que le double appel Gemini
     (retrieval côté Hybrid + génération) ne soit plus lent que Vertex.
     """
@@ -70,16 +71,12 @@ def _generate_answer(query: str, context: str) -> str:
         from vertexai.generative_models import GenerativeModel
         from shared.gemini_retry import generate_with_retry
         prompt = (
-            "Tu es l'assistant interne d'Elevate, société de conseil en Data & Analytics. "
-            "Réponds EXCLUSIVEMENT à partir des documents internes Elevate fournis ci-dessous "
-            "(propositions commerciales, analyses, offres rédigées par Elevate pour ses clients). "
-            "N'utilise JAMAIS ta connaissance générale sur les entreprises ou les marques. "
-            "Si l'information ne figure pas dans les documents, dis-le clairement.\n\n"
-            f"Documents internes Elevate :\n{context}\n\n"
+            f"{GENERATION_SYSTEM_PROMPT}\n\n"
+            f"Documents :\n{context}\n\n"
             f"Question : {query}\n\n"
             "Réponse :"
         )
-        return generate_with_retry(GenerativeModel("gemini-2.0-flash-001"), prompt).text
+        return generate_with_retry(GenerativeModel(GENERATION_MODEL), prompt).text
     except Exception as exc:
         return f"_(Erreur de génération : {exc})_"
 
@@ -87,30 +84,8 @@ def _generate_answer(query: str, context: str) -> str:
 # ── Index resolver ────────────────────────────────────────────────────────────
 
 def _resolve_indexes(query: str, available: list[str]) -> list[str]:
-    if not available:
-        return []
-    if len(available) == 1:
-        return available
-    prompt = (
-        f"Index disponibles : {', '.join(available)}\n"
-        f"Requête : \"{query}\"\n\n"
-        "Quels index faut-il interroger ?\n"
-        "- Si la requête mentionne un ou plusieurs clients précis correspondant "
-        "à des noms d'index, retourne uniquement ceux-là.\n"
-        "- Si la requête est comparative, générale, ou ne cible aucun client "
-        "précis, retourne TOUS les index.\n"
-        "Réponds UNIQUEMENT avec les noms d'index séparés par des virgules."
-    )
-    try:
-        from vertexai.generative_models import GenerativeModel
-        response = GenerativeModel("gemini-2.0-flash-001").generate_content(prompt)
-        names    = [n.strip() for n in response.text.strip().lower().split(",")]
-        resolved = [n for n in names if n in available]
-        return resolved if resolved else available
-    except Exception:
-        q       = query.lower()
-        matched = [n for n in available if n.lower() in q]
-        return matched if matched else available
+    from shared.index_resolver import resolve_indexes
+    return resolve_indexes(query, available)
 
 
 # ── Comparison session state (namespace: "cmp_*") ─────────────────────────────
@@ -537,6 +512,20 @@ if query_input:
 
     hybrid_mode = "multi" if len(resolved) > 1 else "mono"
 
+    # ── Step 1.5: rewrite query — une seule fois, partagée par les deux pipelines ─
+    # Les deux pipelines utilisent la même query réécrite pour une comparaison équitable.
+    # Le contexte conversationnel est celui du pipeline le plus récent (même questions,
+    # réponses différentes → suffisant pour résoudre les références).
+    if _drive_url_match:
+        rewritten_query = query_input
+    else:
+        try:
+            from shared.query_rewriter import rewrite_query
+            shared_context = conv_context_hybrid or conv_context_vertex
+            rewritten_query = rewrite_query(query_input, context=shared_context)
+        except Exception:
+            rewritten_query = query_input
+
     # ── Step 2: colonnes avec placeholders ───────────────────────────────────
     col_v, col_h = st.columns(2)
 
@@ -567,7 +556,8 @@ if query_input:
                 document_url=_drive_url_match.group(0),
             )
         from services.vertex_service import query as vq
-        return vq(corpus, query_input, context=conv_context_vertex)
+        return vq(corpus, rewritten_query, context=conv_context_vertex,
+                  retrieval_query=rewritten_query)
 
     def _run_hybrid():
         import time
@@ -616,15 +606,17 @@ if query_input:
             return {"status": "skipped", "answer": "", "sources": [], "elapsed_s": 0}
         if hybrid_mode == "multi":
             from services.hybrid_service import multi_query
-            result = multi_query(resolved, query_input, retrieval_mode, top_k, context=conv_context_hybrid)
+            result = multi_query(resolved, rewritten_query, retrieval_mode, top_k,
+                                 context=conv_context_hybrid, retrieval_query=rewritten_query)
         else:
             from services.hybrid_service import query as hq
-            result = hq(resolved[0], query_input, retrieval_mode, top_k, context=conv_context_hybrid)
+            result = hq(resolved[0], rewritten_query, retrieval_mode, top_k,
+                        context=conv_context_hybrid, retrieval_query=rewritten_query)
 
         # Génération Gemini sur les chunks récupérés
         if result.get("status") == "success":
             context = result.get("context") or result.get("answer", "")
-            result["generated_answer"] = _generate_answer(query_input, context)
+            result["generated_answer"] = _generate_answer(rewritten_query, context)
 
         # Écrase elapsed_s partiel (retrieval seul) par le temps total réel
         result["elapsed_s"]      = round(time.perf_counter() - t0, 2)

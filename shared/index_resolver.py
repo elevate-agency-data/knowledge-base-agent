@@ -1,7 +1,7 @@
 """
 Shared utility: resolve which hybrid indexes to query for a given prompt.
 
-Uses Gemini Flash to detect client/index names mentioned in the query.
+Uses Gemini Flash to select thematically relevant indexes for a given query.
 Falls back to substring matching, then to all indexes if nothing is found.
 
 Used by:
@@ -32,17 +32,18 @@ def resolve_indexes(query: str, available: list[str]) -> list[str]:
     prompt = (
         f"Index disponibles : {', '.join(available)}\n"
         f"Requête : \"{query}\"\n\n"
-        "Quels index faut-il interroger ?\n"
-        "- Si la requête mentionne un ou plusieurs clients précis correspondant "
-        "à des noms d'index, retourne uniquement ceux-là.\n"
-        "- Si la requête est comparative, générale, ou ne cible aucun client "
-        "précis, retourne TOUS les index.\n"
+        "Sélectionne le ou les index thématiquement pertinents pour répondre à cette requête.\n"
+        "- Analyse le sujet de la requête et choisis uniquement les index dont le contenu "
+        "pourrait contenir la réponse.\n"
+        "- Tu peux retourner un seul index ou plusieurs si la question couvre plusieurs domaines.\n"
+        "- Ne retourne PAS tous les index par défaut : sois sélectif.\n"
         "Réponds UNIQUEMENT avec les noms d'index séparés par des virgules, "
         "en minuscules, sans explication."
     )
     try:
         from vertexai.generative_models import GenerativeModel
         response = GenerativeModel("gemini-2.0-flash-001").generate_content(prompt)
+        print(f"#### la reponse de flash : {response.text} #####" )
         names    = [n.strip().lower() for n in response.text.strip().split(",")]
         resolved = [n for n in names if n in available]
         return resolved if resolved else available

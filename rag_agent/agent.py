@@ -9,6 +9,8 @@ from .tools.list_corpora import list_corpora
 from .tools.rag_query import rag_query
 from .tools.get_document_content import get_document_content
 from .tools.vertex_find_similar import vertex_find_similar
+from .tools.compare_documents import compare_documents
+from .tools.query_document import query_document
 from .config import MODEL
 from hybrid.config import DRIVE_ROOT_FOLDER
 
@@ -32,6 +34,8 @@ root_agent = Agent(
         delete_corpus,
         list_corpora,
         get_document_content,
+        compare_documents,
+        query_document,
         vertex_find_similar,
         hybrid_create_index,
         hybrid_add_data,
@@ -131,14 +135,29 @@ root_agent = Agent(
     **RÈGLE** : ne déduire un filtre que si l'utilisateur le mentionne explicitement
     (langue, type de fichier, auteur, période). Ne jamais inventer un filtre.
 
-    ### Similarité documentaire — URL Drive détectée
+    ### URL Drive détectée — arbre de décision
 
-    **RÈGLE ABSOLUE** : si le message contient une URL Drive
-    (https://drive.google.com/..., https://docs.google.com/..., tout lien Drive),
-    utiliser **UNIQUEMENT** les outils de similarité — **JAMAIS** `hybrid_query` ni `rag_query`.
-    Ne pas passer une URL dans `hybrid_query` ou `rag_query` — ils ne savent pas traiter des URLs Drive.
+    Quand le message contient une ou plusieurs URLs Drive, appliquer cet ordre de priorité :
 
-    Déclencheurs : "similaire à", "proche de", "ressemble à", "documents comme ce fichier", ou tout message contenant un lien Drive.
+    **1. Question sur le contenu d'un document → `query_document`**
+    - L'utilisateur pose une question sur CE document précis
+    - Exemples : "quelle est la charte télétravail dans ce fichier : [url]",
+      "résume ce document : [url]", "que dit ce contrat sur les délais : [url]"
+    - `query_document(document_url="...", question="...")`
+    - Répond en se basant EXCLUSIVEMENT sur le contenu du document — aucun index RAG impliqué
+
+    **2. Comparaison de plusieurs documents → `compare_documents`**
+    - L'utilisateur veut comparer 2 à 10 documents Drive entre eux
+    - Exemples : "compare ces fichiers : [url1] [url2]",
+      "quelles sont les différences entre [url1] et [url2] sur la politique RH"
+    - `compare_documents(document_urls=["url1", "url2", ...], aspect="...")`
+    - Accepte de 2 à 10 URLs — les URLs au-delà de 10 sont ignorées
+    - `aspect` est optionnel — passer l'angle de comparaison si l'utilisateur le précise
+    - Aucun index RAG impliqué — lecture directe des documents
+
+    **3. Recherche de documents similaires → outils de similarité**
+    - Déclencheurs : "similaire à", "proche de", "ressemble à", "documents comme ce fichier"
+    - **Ne jamais** passer une URL dans `hybrid_query` ou `rag_query`
 
     #### Quel outil choisir ?
 
@@ -174,9 +193,11 @@ root_agent = Agent(
     | Question générale sans domaine ni index précisé | Vertex AI — `rag_query` (corpus global) |
     | "tous les index", "l'ensemble des index", "tous les domaines" | Hybrid — `hybrid_query(index_names=[], ...)` (interroge tous les index locaux) |
     | "liste le drive", "contenu du drive", "quels dossiers", "quels domaines dans le drive" (sans dossier précisé) | `hybrid_list_drive(folder_name="{DRIVE_ROOT_FOLDER}")` — **ne jamais demander de précision, utiliser toujours ce dossier** |
-    | Message contient une URL Drive + pipeline non précisé | `hybrid_find_similar` (défaut) |
-    | Message contient une URL Drive + "vertex" / corpus précisé | `vertex_find_similar` |
-    | Message contient une URL Drive + "les deux" | Appeler `hybrid_find_similar` ET `vertex_find_similar` |
+    | URL Drive + question sur le contenu du document | `query_document` |
+    | URL Drive + comparaison entre documents | `compare_documents` |
+    | URL Drive + "similaire à" / recherche de docs proches | `hybrid_find_similar` (défaut) |
+    | URL Drive + "similaire" + "vertex" / corpus précisé | `vertex_find_similar` |
+    | URL Drive + "similaire" + "les deux" | Appeler `hybrid_find_similar` ET `vertex_find_similar` |
     | Ambiguïté pipeline Vertex vs Hybrid → demander à l'utilisateur | — |
 
     ---

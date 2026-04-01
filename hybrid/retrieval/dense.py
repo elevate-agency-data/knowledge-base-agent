@@ -16,12 +16,13 @@ def dense_search(
     index_name: str = "",
     top_k: int = 10,
     filters: dict | None = None,
+    query_embedding: list[float] | None = None,
 ) -> list[dict]:
     """
     Retrieve the most semantically similar chunks to *query*.
 
     Flow:
-    1. Embed the query with *embedding_model*.
+    1. Embed the query with *embedding_model* (skipped if *query_embedding* is provided).
     2. Call ``store.dense_search()`` routed to *index_name*'s table.
     3. Normalise raw cosine scores to the [0, 1] range.
 
@@ -32,6 +33,10 @@ def dense_search(
         index_name:      Index to search (routes to dedicated table).
         top_k:           Number of results to return.
         filters:         Optional metadata filters (langue, domaine, …).
+        query_embedding: Pre-computed query embedding vector.  When provided
+                         the embedding step is skipped — useful for multi-index
+                         queries where the same query is searched across many
+                         indexes.
 
     Returns:
         List of chunk dicts, each with a ``"score"`` key in [0, 1].
@@ -39,8 +44,8 @@ def dense_search(
     """
     filters = filters or {}
 
-    # 1. Embed query
-    query_vector = embedding_model.embed_query(query)
+    # 1. Embed query (reuse pre-computed vector when available)
+    query_vector = query_embedding if query_embedding is not None else embedding_model.embed_query(query)
 
     # 2. Store search — routed to index_name's table, HNSW used at 100%
     # Scores are raw cosine similarities [0, 1] — no normalisation needed

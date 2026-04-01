@@ -326,6 +326,27 @@ def _render_vertex(result: dict, is_drive_url: bool = False) -> None:
     render_sources(result.get("sources", []), pipeline="vertex")
 
 
+def _format_timings(timings: dict) -> str:
+    """Build a human-readable timing breakdown string from a timings dict."""
+    parts: list[str] = []
+    if "resolve_and_rewrite" in timings:
+        parts.append(f"resolve+rewrite {timings['resolve_and_rewrite']}s")
+    else:
+        if "resolve_indexes" in timings:
+            parts.append(f"resolve {timings['resolve_indexes']}s")
+        if "rewrite_query" in timings:
+            parts.append(f"rewrite {timings['rewrite_query']}s")
+    if "embedding" in timings:
+        parts.append(f"embedding {timings['embedding']}s")
+    if "threads" in timings:
+        parts.append(f"search {timings['threads']}s")
+    elif "search" in timings:
+        parts.append(f"search {timings['search']}s")
+    if "generation" in timings:
+        parts.append(f"generation {timings['generation']}s")
+    return " · ".join(parts)
+
+
 def _render_hybrid_mono(result: dict, indexes_used: list[str]) -> None:
     if indexes_used:
         _fn_badge_hybrid("hybrid_rag_query", indexes_used)
@@ -336,14 +357,19 @@ def _render_hybrid_mono(result: dict, indexes_used: list[str]) -> None:
     if result.get("status") == "error":
         _show_error(result.get("message", "Erreur"))
         return
-    retrieval_s    = result.get("elapsed_retrieval_s", result.get("elapsed_s", "?"))
     total_s        = result.get("elapsed_s", "?")
     retrieval_query = result.get("retrieval_query", "")
+    timings        = result.get("timings", {})
+
+    timing_detail = _format_timings(timings)
+
     st.caption(
-        f"{total_s}s total (retrieval {retrieval_s}s + génération) · "
+        f"{total_s}s total · "
         f"{result.get('total_results', 0)} chunks · "
         f"mode `{result.get('retrieval_mode', '—')}`"
     )
+    if timing_detail:
+        st.caption(f"_{timing_detail}_")
     if retrieval_query:
         st.caption(f"query retrieval : _{retrieval_query}_")
     # Réponse générée par Gemini
@@ -405,13 +431,18 @@ def _render_hybrid_multi(result: dict, indexes_used: list[str]) -> None:
     empty          = result.get("indexes_empty", [])
     total          = result.get("total_results", 0)
     total_s        = result.get("elapsed_s", "?")
-    retrieval_s    = result.get("elapsed_retrieval_s", total_s)
     retrieval_query = result.get("retrieval_query", "")
+    timings        = result.get("timings", {})
+
+    timing_detail = _format_timings(timings)
+
     st.caption(
-        f"{total_s}s total (retrieval {retrieval_s}s + génération) · "
+        f"{total_s}s total · "
         f"{total} chunks · {len(indexes_used)} index"
         + (f" · vides : {', '.join(empty)}" if empty else "")
     )
+    if timing_detail:
+        st.caption(f"_{timing_detail}_")
     if retrieval_query:
         st.caption(f"query retrieval : _{retrieval_query}_")
     # Réponse générée par Gemini (sur le contexte fusionné de tous les index)
@@ -504,27 +535,51 @@ if query_input:
     # ── Drive URL detection (used by both placeholder and pipeline logic) ────
     _drive_url_match = _DRIVE_URL_RE.search(query_input)
 
-    # ── Step 1: resolve indexes (fast, avant l'exécution lourde) ─────────────
+    # ── Step 1: resolve indexes + rewrite query (parallel) ─────────────────
+    import time as _t
+
     resolved: list[str] = []
-    if all_indexes:
-        with st.spinner("Détection des index pertinents…"):
-            resolved = _resolve_indexes(query_input, all_indexes)
+    rewritten_query = query_input
+    pre_timings: dict[str, float] = {}
+
+    if _drive_url_match:
+        # Drive URL — no resolve/rewrite needed
+        if all_indexes:
+            resolved = all_indexes
+    else:
+        # Run resolve + rewrite in parallel (both are Gemini Flash calls)
+        with st.spinner("Résolution des index + réécriture de la requête…"):
+            import concurrent.futures as _cf
+            t_pre = _t.perf_counter()
+
+            def _do_resolve():
+                if not all_indexes:
+                    return []
+                t0 = _t.perf_counter()
+                r = _resolve_indexes(query_input, all_indexes)
+                pre_timings["resolve_indexes"] = round(_t.perf_counter() - t0, 2)
+                return r
+
+            def _do_rewrite():
+                try:
+                    from shared.query_rewriter import rewrite_query as _rw
+                    shared_context = conv_context_hybrid or conv_context_vertex
+                    t0 = _t.perf_counter()
+                    r = _rw(query_input, context=shared_context)
+                    pre_timings["rewrite_query"] = round(_t.perf_counter() - t0, 2)
+                    return r
+                except Exception:
+                    return query_input
+
+            with _cf.ThreadPoolExecutor(max_workers=2) as pre_pool:
+                f_resolve = pre_pool.submit(_do_resolve)
+                f_rewrite = pre_pool.submit(_do_rewrite)
+                resolved = f_resolve.result()
+                rewritten_query = f_rewrite.result()
+
+            pre_timings["resolve_and_rewrite"] = round(_t.perf_counter() - t_pre, 2)
 
     hybrid_mode = "multi" if len(resolved) > 1 else "mono"
-
-    # ── Step 1.5: rewrite query — une seule fois, partagée par les deux pipelines ─
-    # Les deux pipelines utilisent la même query réécrite pour une comparaison équitable.
-    # Le contexte conversationnel est celui du pipeline le plus récent (même questions,
-    # réponses différentes → suffisant pour résoudre les références).
-    if _drive_url_match:
-        rewritten_query = query_input
-    else:
-        try:
-            from shared.query_rewriter import rewrite_query
-            shared_context = conv_context_hybrid or conv_context_vertex
-            rewritten_query = rewrite_query(query_input, context=shared_context)
-        except Exception:
-            rewritten_query = query_input
 
     # ── Step 2: colonnes avec placeholders ───────────────────────────────────
     col_v, col_h = st.columns(2)
@@ -604,6 +659,8 @@ if query_input:
 
         if not resolved:
             return {"status": "skipped", "answer": "", "sources": [], "elapsed_s": 0}
+
+        t_retrieval = time.perf_counter()
         if hybrid_mode == "multi":
             from services.hybrid_service import multi_query
             result = multi_query(resolved, rewritten_query, retrieval_mode, top_k,
@@ -612,15 +669,23 @@ if query_input:
             from services.hybrid_service import query as hq
             result = hq(resolved[0], rewritten_query, retrieval_mode, top_k,
                         context=conv_context_hybrid, retrieval_query=rewritten_query)
+        retrieval_elapsed = round(time.perf_counter() - t_retrieval, 2)
 
         # Génération Gemini sur les chunks récupérés
+        t_gen = time.perf_counter()
         if result.get("status") == "success":
             context = result.get("context") or result.get("answer", "")
             result["generated_answer"] = _generate_answer(rewritten_query, context)
+        gen_elapsed = round(time.perf_counter() - t_gen, 2)
 
-        # Écrase elapsed_s partiel (retrieval seul) par le temps total réel
-        result["elapsed_s"]      = round(time.perf_counter() - t0, 2)
-        result["elapsed_retrieval_s"] = result.get("elapsed_s", 0)  # garder pour info
+        # Merge all timings: pre-processing + retrieval inner + generation
+        all_timings = dict(pre_timings)
+        inner = result.get("timings", {})
+        all_timings.update(inner)
+        all_timings["generation"] = gen_elapsed
+        all_timings["total"] = round(time.perf_counter() - t0, 2)
+        result["timings"] = all_timings
+        result["elapsed_s"] = all_timings["total"]
         return result
 
     # ── Step 4: exécution parallèle, affichage dès que prêt ──────────────────

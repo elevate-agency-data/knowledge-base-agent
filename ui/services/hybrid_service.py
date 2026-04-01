@@ -30,6 +30,26 @@ def list_indexes() -> list[dict]:
         return []
 
 
+def list_indexes_grouped() -> dict[str, list[dict]]:
+    """
+    Return indexes grouped by company (two-level hierarchy).
+
+    Returns:
+        Dict mapping company name → list of index dicts belonging to that company.
+        Indexes without ``__`` are grouped under their own name.
+    """
+    indexes = list_indexes()
+    groups: dict[str, list[dict]] = {}
+    for idx in indexes:
+        name = idx.get("index_name", "")
+        if "__" in name:
+            company = name.split("__", 1)[0]
+        else:
+            company = name
+        groups.setdefault(company, []).append(idx)
+    return groups
+
+
 def get_index_info(index_name: str) -> dict:
     """Return detailed info for a single index (files, chunks, etc.)."""
     from hybrid.tools.hybrid_index_info import hybrid_index_info
@@ -101,9 +121,12 @@ def query(index_name: str, query_text: str,
 
 
 def multi_query(index_names: list[str], query_text: str,
-                retrieval_mode: str = "hybrid", top_k_per_index: int = 5,
+                retrieval_mode: str = "hybrid", top_k: int = 10,
                 context: str = "", retrieval_query: str = "") -> dict:
-    """Query multiple hybrid indexes simultaneously."""
+    """Query multiple hybrid indexes simultaneously.
+
+    *top_k* is the **global** maximum number of chunks returned (not per index).
+    """
     from hybrid.tools.hybrid_query import hybrid_query
 
     t0 = time.perf_counter()
@@ -111,7 +134,7 @@ def multi_query(index_names: list[str], query_text: str,
         index_names=index_names,
         query=query_text,
         retrieval_mode=retrieval_mode,
-        top_k=top_k_per_index * len(index_names),
+        top_k=top_k,
         context=context,
         retrieval_query=retrieval_query,
     )
@@ -137,4 +160,18 @@ def add_data(index_name: str, folder_names: list[str],
         folder_names=folder_names,
         chunk_strategy=chunk_strategy,
         max_files=max_files,
+    )
+
+
+def add_data_auto(
+    company_filter: list[str] | None = None,
+    chunk_strategy: str = "fixed",
+    max_files_per_index: int = 0,
+) -> dict:
+    """Auto-ingest all companies/notions from the Drive tree."""
+    from hybrid.tools.hybrid_add_data import hybrid_add_data_auto
+    return hybrid_add_data_auto(
+        company_filter=company_filter or None,
+        chunk_strategy=chunk_strategy,
+        max_files_per_index=max_files_per_index,
     )

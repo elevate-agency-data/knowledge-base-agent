@@ -83,11 +83,12 @@ def hybrid_rag_query(
         store = get_store()
 
         # ----------------------------------------------------------------
-        # Dense path
+        # Dense path — embed query once, pass vector directly
         # ----------------------------------------------------------------
         dense_results: list[dict] = []
         if retrieval_mode in ("hybrid", "dense"):
             embedder = get_embedding_model(DEFAULT_EMBEDDING_MODEL)
+            query_embedding = embedder.embed_query(query)
             dense_results = dense_search(
                 query=query,
                 store=store,
@@ -95,6 +96,7 @@ def hybrid_rag_query(
                 index_name=index_name,
                 top_k=top_k * 2,   # Retrieve more for fusion
                 filters=filters,
+                query_embedding=query_embedding,
             )
 
         # ----------------------------------------------------------------

@@ -15,7 +15,7 @@ from .config import MODEL
 from hybrid.config import DRIVE_ROOT_FOLDER
 
 from hybrid.tools.hybrid_create_index import hybrid_create_index
-from hybrid.tools.hybrid_add_data     import hybrid_add_data
+from hybrid.tools.hybrid_add_data     import hybrid_add_data, hybrid_add_data_auto
 from hybrid.tools.hybrid_query        import hybrid_query
 from hybrid.tools.hybrid_find_similar import hybrid_find_similar
 from hybrid.tools.hybrid_list_drive   import hybrid_list_drive
@@ -39,6 +39,7 @@ root_agent = Agent(
         vertex_find_similar,
         hybrid_create_index,
         hybrid_add_data,
+        hybrid_add_data_auto,
         hybrid_query,
         hybrid_find_similar,
         hybrid_list_drive,
@@ -94,19 +95,43 @@ root_agent = Agent(
     - Supprimer un index → `hybrid_delete_index` (demander confirmation)
     - Lister le contenu d'un dossier Drive → `hybrid_list_drive`
 
-    ### Structure Drive
-    Le dossier racine contenant les sous-dossiers par domaine est : **"{DRIVE_ROOT_FOLDER}"**
-    - Si l'utilisateur demande de lister le Drive, son contenu, les dossiers ou les domaines
-      disponibles **sans préciser de dossier**, utiliser toujours ce dossier racine :
+    ### Structure Drive — arborescence à deux niveaux
+    Le dossier racine est : **"{DRIVE_ROOT_FOLDER}"**
+
+    L'arborescence suit une structure à **deux niveaux** :
+    ```
+    {DRIVE_ROOT_FOLDER}/
+      ├── Entreprise1/              (Niveau 1 : entreprise/client)
+      │    ├── RH/                  (Niveau 2 : notion/domaine)  → index "entreprise1__rh"
+      │    └── Commercial/          (Niveau 2 : notion/domaine)  → index "entreprise1__commercial"
+      └── Entreprise2/
+           └── Juridique/           → index "entreprise2__juridique"
+    ```
+
+    Les index hybrid suivent la convention **`entreprise__notion`** (séparés par `__`).
+
+    #### Ingestion automatique (recommandé)
+    - **Tout ingérer** : `hybrid_add_data_auto()` — scanne l'arborescence complète,
+      crée un index `entreprise__notion` par couple, ingère tous les fichiers.
+    - **Filtrer par entreprise** : `hybrid_add_data_auto(company_filter=["celio"])`
+    - **Par batch** : `hybrid_add_data_auto(max_files_per_index=20)` — rappeler plusieurs fois,
+      les fichiers déjà indexés sont skippés automatiquement.
+    - Quand l'utilisateur dit "ingère tout le Drive", "ingestion automatique",
+      "ingère toutes les données" → utiliser **`hybrid_add_data_auto()`**
+
+    #### Ingestion manuelle (un dossier précis)
+    - `hybrid_add_data(index_name="entreprise__notion", folder_names=["NomDossier"])`
+
+    #### Lister le Drive
+    - Si l'utilisateur demande de lister le Drive **sans préciser de dossier** :
       `hybrid_list_drive(folder_name="{DRIVE_ROOT_FOLDER}")`
-    - Chaque sous-dossier retourné = un domaine
-    - Pour ingérer un domaine : `hybrid_add_data(index_name="<domaine>", folder_names=["<NomDossierDomaine>"])`
-      Les dossiers sont trouvés par nom même s'ils sont imbriqués.
 
     ### Outils Hybrid — Interrogation
     - Toujours utiliser `hybrid_query(index_names=[...], query="...")`
-    - 1 domaine  → `hybrid_query(index_names=["rh"], query="...")`
-    - Plusieurs domaines → `hybrid_query(index_names=["rh","marketing"], query="...")`
+    - 1 index précis → `hybrid_query(index_names=["celio__rh"], query="...")`
+    - 1 entreprise (tous ses index) → `hybrid_query(index_names=["celio"], query="...")`
+      (auto-expand vers `["celio__rh", "celio__commercial", ...]`)
+    - Plusieurs index → `hybrid_query(index_names=["celio__rh","celio__commercial"], query="...")`
     - **Aucun domaine précisé** → `hybrid_query(index_names=[], query="...")` :
       les index pertinents sont détectés automatiquement via Gemini Flash,
       avec fallback sur tous les index si rien n'est identifié.
@@ -186,7 +211,9 @@ root_agent = Agent(
     | "crée un corpus..." | Vertex AI |
     | "crée un index hybrid..." | Hybrid |
     | "ajoute tout Insight Factory" | Vertex AI (ingestion massive) |
-    | "ajoute le dossier RH dans l'index rh" | Hybrid |
+    | "ingère tout le Drive" / "ingestion automatique" | Hybrid — `hybrid_add_data_auto()` |
+    | "ingère les données de Celio" | Hybrid — `hybrid_add_data_auto(company_filter=["celio"])` |
+    | "ajoute le dossier RH dans l'index celio__rh" | Hybrid — `hybrid_add_data(...)` |
     | "interroge le corpus [nom]" | Vertex AI — appeler list_corpora d'abord si le nom n'est pas donné |
     | "interroge l'index hybrid rh" | Hybrid |
     | "compare rh et marketing" | Hybrid (index_names=["rh","marketing"]) |

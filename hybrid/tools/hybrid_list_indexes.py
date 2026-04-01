@@ -77,10 +77,22 @@ def hybrid_list_indexes() -> dict:
                 "total_files":     total_files,
             })
 
+        # Group indexes by company for hierarchical view
+        INDEX_SEP = "__"
+        companies: dict[str, list[str]] = {}
+        for idx in indexes:
+            name = idx["index_name"]
+            if INDEX_SEP in name:
+                company, notion = name.split(INDEX_SEP, 1)
+                companies.setdefault(company, []).append(notion)
+            else:
+                companies.setdefault(name, [])
+
         return {
-            "status":  "success",
-            "indexes": indexes,
-            "total":   len(indexes),
+            "status":    "success",
+            "indexes":   indexes,
+            "total":     len(indexes),
+            "companies": companies,
         }
 
     except Exception as exc:

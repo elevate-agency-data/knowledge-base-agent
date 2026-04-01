@@ -16,7 +16,7 @@ SERVICE_ACCOUNT_PATH: str = "rag_agent/key.json"
 # Drive — dossier racine contenant les sous-dossiers clients
 # Modifier cette valeur pour pointer vers un autre répertoire Drive.
 # ---------------------------------------------------------------------------
-DRIVE_ROOT_FOLDER: str = "RAG (Test & Co)"
+DRIVE_ROOT_FOLDER: str = "RAG"
 
 # ---------------------------------------------------------------------------
 # Environment: "local" → DuckDB  |  "gcp" → AlloyDB

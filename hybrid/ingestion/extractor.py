@@ -296,6 +296,80 @@ def extract_from_url(url: str, drive_service: Any) -> str:
         raise ValueError(f"Unsupported MIME type '{mime}' for file {file_id}")
 
 
+def list_drive_tree(drive_service: Any) -> dict[str, dict[str, list[dict]]]:
+    """
+    Scan the Drive root folder and return a two-level tree: company → notion → files.
+
+    Expects the following structure under DRIVE_ROOT_FOLDER::
+
+        RAG (Test & Co)/
+          ├── Celio/
+          │    ├── RH/        → [FileInfo, ...]
+          │    └── Commercial/ → [FileInfo, ...]
+          └── ClientB/
+               └── Juridique/ → [FileInfo, ...]
+
+    Returns:
+        Dict like ``{"celio": {"rh": [FileInfo, ...], "commercial": [...]}, ...}``.
+        Keys are lowercased.
+    """
+    from hybrid.config import DRIVE_ROOT_FOLDER
+
+    root_id = _find_folder_by_name(DRIVE_ROOT_FOLDER, drive_service)
+    if not root_id:
+        raise ValueError(f"Drive root folder '{DRIVE_ROOT_FOLDER}' not found.")
+
+    tree: dict[str, dict[str, list[dict]]] = {}
+
+    # Level 1 — company folders
+    company_folders = _list_subfolders(root_id, drive_service)
+    for company_name, company_id in company_folders:
+        company_key = company_name.strip().lower()
+        tree[company_key] = {}
+
+        # Level 2 — notion folders
+        notion_folders = _list_subfolders(company_id, drive_service)
+        for notion_name, notion_id in notion_folders:
+            notion_key = notion_name.strip().lower()
+            files = _list_folder_by_id(notion_id, drive_service, recursive=True)
+            tree[company_key][notion_key] = files
+
+    return tree
+
+
+def _list_subfolders(parent_id: str, drive_service: Any) -> list[tuple[str, str]]:
+    """
+    List direct child folders of *parent_id*.
+
+    Returns:
+        List of (folder_name, folder_id) tuples.
+    """
+    q = (
+        f"'{parent_id}' in parents "
+        "and mimeType = 'application/vnd.google-apps.folder' "
+        "and trashed = false"
+    )
+    results: list[tuple[str, str]] = []
+    page_token = None
+    while True:
+        kwargs: dict = dict(
+            q=q,
+            fields="nextPageToken, files(id, name)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            pageSize=1000,
+        )
+        if page_token:
+            kwargs["pageToken"] = page_token
+        resp = drive_service.files().list(**kwargs).execute()
+        for f in resp.get("files", []):
+            results.append((f["name"], f["id"]))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+    return results
+
+
 def list_drive_folder(
     folder_name: str, drive_service: Any, recursive: bool = True
 ) -> list[dict]:

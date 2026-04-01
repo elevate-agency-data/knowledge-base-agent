@@ -51,7 +51,7 @@ METRIC_HELP      = {
     "precision": "Parmi les 10 résultats, quelle fraction est pertinente ?",
 }
 MODEL_LABELS     = {"minilm-384": "MiniLM-384", "mpnet-768": "MPNet-768",
-                    "e5-large-1024": "E5-Large-1024", "bge-m3": "BGE-M3", "vertex": "Vertex (Google)"}
+                    "e5-large-1024": "E5-Large-1024", "bge-m3": "BGE-M3", "vertex": "Naive (Google)"}
 CHUNK_LABELS     = {"fixed": "Fixed (512)", "fixed-128": "Fixed 128", "fixed-256": "Fixed 256",
                     "fixed-512": "Fixed 512", "fixed-1024": "Fixed 1024",
                     "semantic": "Semantic", "hierarchical": "Hierarchical"}
@@ -62,8 +62,8 @@ MEDAL            = ["1.", "2.", "3."]
 # ── Shared style helpers ───────────────────────────────────────────────────────
 
 def _color_score(val: float) -> str:
-    if val >= 0.9: return "background-color: #d4edda; color: #155724"
-    if val >= 0.7: return "background-color: #fff3cd; color: #856404"
+    if val >= 0.9: return "background-color: #E6F4ED; color: #006A4E"
+    if val >= 0.7: return "background-color: #FFF8E6; color: #8B7335"
     return "background-color: #f8d7da; color: #721c24"
 
 def _style_df(df, metric_cols):
@@ -332,7 +332,7 @@ def _render_pipeline_result(
     a_icon = ("✅" if answer_ok else "❌") if answer_ok is not None else "—"
     s_icon = "✅" if source_ok else "❌"
 
-    label   = "Hybrid RAG" if pipeline == "hybrid" else "Vertex AI RAG"
+    label   = "Hybrid RAG" if pipeline == "hybrid" else "Naive RAG"
     idx_str = ""
     if pipeline == "hybrid" and result.get("indexes"):
         idx_str = f" · `{'`, `'.join(result['indexes'])}`"
@@ -524,9 +524,9 @@ with tab2:
         except Exception:
             _copts = []
         if _copts:
-            eval_corpus = st.selectbox("Corpus Vertex", _copts, key="eval_corpus")
+            eval_corpus = st.selectbox("Corpus Naive RAG", _copts, key="eval_corpus")
         else:
-            eval_corpus = st.text_input("Corpus Vertex (nom)", key="eval_corpus_txt", placeholder="base-rag")
+            eval_corpus = st.text_input("Corpus Naive RAG (nom)", key="eval_corpus_txt", placeholder="base-rag")
 
     eval_pipeline = "Les deux"   
 
@@ -566,7 +566,7 @@ with tab2:
             with hdr_h:
                 st.markdown(f"<h4 style='color:{HYBRID_COLOR}'>Hybrid RAG</h4>", unsafe_allow_html=True)
             with hdr_v:
-                st.markdown(f"<h4 style='color:{VERTEX_COLOR}'>Vertex AI RAG</h4>", unsafe_allow_html=True)
+                st.markdown(f"<h4 style='color:{VERTEX_COLOR}'>Naive RAG</h4>", unsafe_allow_html=True)
             st.divider()
 
             # ── Process each question ─────────────────────────────────────
@@ -584,7 +584,7 @@ with tab2:
                 with col_h:
                     h_ph = st.empty(); h_ph.info("Hybrid en cours…")
                 with col_v:
-                    v_ph = st.empty(); v_ph.info("Vertex en cours…")
+                    v_ph = st.empty(); v_ph.info("Naive RAG en cours…")
 
                 h_ao = h_so = v_ao = v_so = None
                 h_ans_txt = v_ans_txt = ""
@@ -654,7 +654,7 @@ with tab2:
                     f"**Score en cours** ({idx+1}/{len(questions)}) — "
                     f"<span style='color:{HYBRID_COLOR}'>Hybrid</span> "
                     f"Réponse {_pct(scores['H_answer'])} · Source {_pct(scores['H_source'])} &nbsp;|&nbsp; "
-                    f"<span style='color:{VERTEX_COLOR}'>Vertex</span> "
+                    f"<span style='color:{VERTEX_COLOR}'>Naive</span> "
                     f"Réponse {_pct(scores['V_answer'])} · Source {_pct(scores['V_source'])}",
                     unsafe_allow_html=True,
                 )
@@ -667,8 +667,8 @@ with tab2:
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Hybrid — Réponse", final_scores["H_answer"])
             m2.metric("Hybrid — Source",  final_scores["H_source"])
-            m3.metric("Vertex — Réponse", final_scores["V_answer"])
-            m4.metric("Vertex — Source",  final_scores["V_source"])
+            m3.metric("Naive — Réponse", final_scores["V_answer"])
+            m4.metric("Naive — Source",  final_scores["V_source"])
 
             # ── Save run ──────────────────────────────────────────────────
             saved_path = _save_eval_run(all_rows, eval_pipeline, sheet_url, final_scores)
@@ -705,8 +705,8 @@ with tab2:
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Hybrid — Réponse", sc.get("H_answer", "—"))
         m2.metric("Hybrid — Source",  sc.get("H_source", "—"))
-        m3.metric("Vertex — Réponse", sc.get("V_answer", "—"))
-        m4.metric("Vertex — Source",  sc.get("V_source", "—"))
+        m3.metric("Naive — Réponse", sc.get("V_answer", "—"))
+        m4.metric("Naive — Source",  sc.get("V_source", "—"))
 
         def _ico(v): return ("✅" if v else "❌") if v is not None else "—"
         rows = run.get("results", [])

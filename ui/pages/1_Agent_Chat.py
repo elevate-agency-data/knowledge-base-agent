@@ -22,7 +22,7 @@ st.set_page_config(
 
 # ── Cached runner ─────────────────────────────────────────────────────────────
 
-@st.cache_resource(show_spinner="Chargement de l'agent…")
+@st.cache_resource(show_spinner="Loading AI agent...")
 def get_runner():
     from services.agent_runner import AgentRunner
     return AgentRunner()
@@ -133,10 +133,10 @@ with st.sidebar:
 # Name = first user message or default
 sessions     = st.session_state.get("agent_sessions_cache", [])
 active_meta  = next((s for s in sessions if s["id"] == _active_sid()), None)
-session_name = active_meta["name"] if active_meta else "Nouvelle conversation"
+session_name = active_meta["name"] if active_meta else "New conversation"
 
 st.title(session_name)
-st.caption("L'agent choisit automatiquement Vertex AI RAG ou Hybrid RAG selon votre demande.")
+st.caption("The AI agent automatically selects the best retrieval pipeline for your question.")
 
 # ── Chat history ──────────────────────────────────────────────────────────────
 

@@ -3,7 +3,7 @@ Page 5 — Simple Chat
 
 Interface simplifiée pour utilisateurs non-techniques.
 Un toggle active ou désactive le RAG. Quand le RAG est actif, le pipeline
-(Vertex AI ou Hybrid) est sélectionné en sidebar.
+(Naive RAG ou Hybrid) est sélectionné en sidebar.
 
 Hybrid RAG : les index pertinents sont détectés automatiquement via Gemini Flash
              (fallback sur tous les index si aucun n'est identifié).
@@ -21,7 +21,7 @@ st.set_page_config(
 
 # ── Constantes ────────────────────────────────────────────────────────────────
 
-_PIPELINE_VERTEX = "Vertex AI"
+_PIPELINE_VERTEX = "Naive RAG"
 _PIPELINE_HYBRID = "Hybrid RAG"
 _PIPELINES       = [_PIPELINE_VERTEX, _PIPELINE_HYBRID]
 
@@ -92,7 +92,7 @@ with st.sidebar:
         st.divider()
 
         if pipeline == _PIPELINE_VERTEX:
-            st.markdown("**Corpus Vertex AI**")
+            st.markdown("**Corpus Naive RAG**")
             try:
                 from services.vertex_service import list_corpora
                 corpus_names = [c["display_name"] for c in list_corpora()]
@@ -142,7 +142,7 @@ with st.sidebar:
         st.info("Chatbot Gemini\nSans enrichissement RAG")
     elif st.session_state.sc_pipeline == _PIPELINE_VERTEX:
         label = st.session_state.sc_corpus or "—"
-        st.success(f"Vertex AI\nCorpus : **{label}**")
+        st.success(f"Naive RAG\nCorpus : **{label}**")
     else:
         st.success("Hybrid RAG\nIndex détectés automatiquement")
 
@@ -155,7 +155,7 @@ if not rag_on:
     st.caption("Réponse du modèle sans récupération de documents.")
 elif st.session_state.sc_pipeline == _PIPELINE_VERTEX:
     st.caption(
-        f"Documents récupérés depuis le corpus Vertex AI "
+        f"Documents récupérés depuis le corpus Naive RAG "
         f"**{st.session_state.sc_corpus or '—'}**."
     )
 else:
@@ -197,7 +197,7 @@ for msg in st.session_state.sc_messages:
 
 _ready = True
 if rag_on and st.session_state.sc_pipeline == _PIPELINE_VERTEX and not st.session_state.sc_corpus:
-    st.warning("Sélectionnez un corpus Vertex AI dans la barre latérale.")
+    st.warning("Sélectionnez un corpus Naive RAG dans la barre latérale.")
     _ready = False
 
 _placeholder = (
@@ -243,7 +243,7 @@ if user_input:
                     "elapsed_s": elapsed,
                 })
 
-            # ── Vertex AI RAG ─────────────────────────────────────────────────
+            # ── Naive RAG RAG ─────────────────────────────────────────────────
             elif st.session_state.sc_pipeline == _PIPELINE_VERTEX:
                 import re as _re
                 _drive_url = _re.search(
@@ -259,11 +259,11 @@ if user_input:
                     )
 
                     if result.get("status") == "error":
-                        raise RuntimeError(result.get("message", "Erreur Vertex find_similar"))
+                        raise RuntimeError(result.get("message", "Erreur Naive RAG find_similar"))
 
                     similar = result.get("results", [])
                     elapsed = result.get("elapsed_s")
-                    answer  = f"Voici les **{len(similar)} documents** les plus similaires (Vertex AI RAG) :"
+                    answer  = f"Voici les **{len(similar)} documents** les plus similaires (Naive RAG RAG) :"
 
                     with st.chat_message("assistant"):
                         st.markdown(answer)
@@ -275,7 +275,7 @@ if user_input:
                                 lines.append(f"- [{name}]({url})")
                             st.markdown("\n".join(lines))
                         if elapsed is not None:
-                            st.caption(f"{elapsed}s · vertex_find_similar · corpus {st.session_state.sc_corpus}")
+                            st.caption(f"{elapsed}s · naive_find_similar · corpus {st.session_state.sc_corpus}")
 
                     sources = [{"title": r["title"], "uri": r["uri"]} for r in similar]
                     st.session_state.sc_messages.append({
@@ -295,7 +295,7 @@ if user_input:
                     )
 
                     if result.get("status") == "error":
-                        raise RuntimeError(result.get("message", "Erreur Vertex"))
+                        raise RuntimeError(result.get("message", "Erreur Naive RAG"))
 
                     answer  = result.get("answer", "")
                     sources = result.get("sources", [])

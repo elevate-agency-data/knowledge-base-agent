@@ -1,7 +1,7 @@
 """
 Page 2 — RAG Comparison
 
-Vertex AI RAG (gauche) vs Hybrid RAG (droite).
+Naive RAG (gauche) vs Hybrid RAG (droite).
 
 Exécution : les deux pipelines tournent en parallèle (ThreadPoolExecutor).
 Affichage : chaque colonne se met à jour dès que son pipeline est terminé
@@ -491,7 +491,7 @@ if query_input:
     corpus = selected_corpus if isinstance(selected_corpus, str) else ""
 
     if not corpus and not all_indexes:
-        st.warning("Aucun corpus Vertex ni index Hybrid disponible.")
+        st.warning("Aucun corpus Naive RAG ni index Hybrid disponible.")
         st.stop()
 
     # Auto-name session from first query
@@ -586,7 +586,7 @@ if query_input:
 
     with col_v:
         v_ph = st.empty()
-        v_ph.info(f"Vertex en cours… `{corpus}`")
+        v_ph.info(f"Naive RAG en cours… `{corpus}`")
 
     with col_h:
         if _drive_url_match:

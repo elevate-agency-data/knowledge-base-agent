@@ -9,19 +9,22 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from rag_agent.config import MODEL as GENERATION_MODEL, GENERATION_SYSTEM_PROMPT
 
 # ── Page meta ─────────────────────────────────────────────────────────────────
-APP_TITLE       = "Knowledge Base Agent"
+APP_TITLE       = "AI for Customer Care"
+APP_SUBTITLE    = "Workshop Chatbot Knowledge Base"
 APP_ICON        = None
 LAYOUT          = "wide"
 
-# ── Brand colors ──────────────────────────────────────────────────────────────
-VERTEX_COLOR    = "#4285F4"   # Google Blue
-HYBRID_COLOR    = "#34A853"   # Google Green
-USER_COLOR      = "#F8F9FA"
-TOOL_COLOR      = "#FFF3CD"
+# ── Brand colors (Lacoste green on white) ────────────────────────────────────
+VERTEX_COLOR    = "#006A4E"   # Lacoste dark green
+HYBRID_COLOR    = "#00A651"   # Lacoste bright green
+ACCENT_COLOR    = "#006A4E"   # Primary accent
+ACCENT_LIGHT    = "#E6F4ED"   # Light green tint for backgrounds
+USER_COLOR      = "#F5FAF7"   # Soft green-white
+TOOL_COLOR      = "#E6F4ED"   # Light green tint
 ERROR_COLOR     = "#F8D7DA"
 
 # ── Pipeline labels ───────────────────────────────────────────────────────────
-VERTEX_LABEL    = "Vertex AI RAG"
+VERTEX_LABEL    = "Naive RAG"
 HYBRID_LABEL    = "Hybrid RAG"
 
 # ── Agent ─────────────────────────────────────────────────────────────────────

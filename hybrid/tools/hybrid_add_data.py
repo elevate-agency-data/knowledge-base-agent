@@ -30,9 +30,12 @@ from hybrid.config import (
 )
 from hybrid.stores import get_store
 from hybrid.embeddings import get_embedding_model
-from hybrid.ingestion.extractor import list_drive_folder, extract_from_url
+from hybrid.ingestion.extractor import list_drive_folder, list_drive_tree, extract_from_url
 from hybrid.ingestion.chunker import chunk_text
 from hybrid.ingestion.metadata import build_metadata
+
+# Separator used to build hierarchical index names: company__notion
+INDEX_SEP = "__"
 
 # Max characters extracted per file to protect against huge documents
 _MAX_FILE_CHARS = 500_000  # ~100 pages
@@ -403,3 +406,205 @@ def _embed_in_batches(
         batch = texts[i: i + batch_size]
         results.extend(embedder.embed_documents(batch))
     return results
+
+
+# ---------------------------------------------------------------------------
+# Auto-ingest from Drive tree (company → notion → files)
+# ---------------------------------------------------------------------------
+
+
+def hybrid_add_data_auto(
+    company_filter: list[str] | None = None,
+    chunk_strategy: str = "fixed",
+    max_files_per_index: int = 0,
+) -> dict:
+    """
+    Auto-ingest all companies and notions from the Drive tree.
+
+    Scans DRIVE_ROOT_FOLDER for the two-level structure::
+
+        RAG (Test & Co)/
+          ├── Celio/
+          │    ├── RH/         → index "celio__rh"
+          │    └── Commercial/  → index "celio__commercial"
+          └── ClientB/
+               └── Juridique/  → index "clientb__juridique"
+
+    For each company/notion pair:
+      1. Creates the index ``company__notion`` if it does not exist.
+      2. Ingests all files from the notion folder into that index.
+      3. The ``domaine`` metadata field is set to the notion folder name.
+
+    Args:
+        company_filter:      Optional list of company names to process.
+                             If empty/None, all companies are processed.
+        chunk_strategy:      ``"fixed"``, ``"semantic"``, or ``"hierarchical"``.
+        max_files_per_index: Max new files per index per call (0 = no limit).
+
+    Returns:
+        Dict with per-index results and overall summary.
+    """
+    embedding_model = DEFAULT_EMBEDDING_MODEL
+
+    # -- Build Drive service -------------------------------------------------
+    try:
+        from googleapiclient.discovery import build
+        from google.oauth2 import service_account
+
+        creds = service_account.Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_PATH,
+            scopes=["https://www.googleapis.com/auth/drive.readonly"],
+        )
+        drive_service = build("drive", "v3", credentials=creds)
+    except Exception as exc:
+        return {"status": "error", "message": f"Failed to connect to Google Drive: {exc}"}
+
+    # -- Scan Drive tree -----------------------------------------------------
+    try:
+        tree = list_drive_tree(drive_service)
+    except Exception as exc:
+        return {"status": "error", "message": f"Failed to scan Drive tree: {exc}"}
+
+    if not tree:
+        return {"status": "error", "message": "No company folders found in Drive root."}
+
+    # -- Optional filter on companies ----------------------------------------
+    if company_filter:
+        allowed = {c.strip().lower() for c in company_filter}
+        tree = {k: v for k, v in tree.items() if k in allowed}
+        if not tree:
+            return {
+                "status": "error",
+                "message": f"None of the requested companies found. Available: {list(tree.keys())}",
+            }
+
+    # -- Load embedding model ------------------------------------------------
+    try:
+        embedder = get_embedding_model(embedding_model)
+        emb_dim = embedder.get_dimension()
+    except Exception as exc:
+        return {"status": "error", "message": f"Failed to load embedding model: {exc}"}
+
+    # -- Chunk strategy parameters -------------------------------------------
+    chunk_params: dict = {}
+    if chunk_strategy == "fixed":
+        chunk_params = {"size": CHUNK_SIZE, "overlap": CHUNK_OVERLAP}
+    elif chunk_strategy == "semantic":
+        chunk_params = {"threshold": SEMANTIC_BREAKPOINT_THRESHOLD}
+    elif chunk_strategy == "hierarchical":
+        chunk_params = {"parent_size": PARENT_CHUNK_SIZE, "child_size": CHILD_CHUNK_SIZE}
+
+    store = get_store()
+    per_index_results: list[dict] = []
+    total_files = 0
+    total_chunks = 0
+
+    for company, notions in tree.items():
+        for notion, file_infos in notions.items():
+            index_name = f"{company}{INDEX_SEP}{notion}"
+            print(f"[auto] === {index_name} ({len(file_infos)} file(s)) ===")
+
+            # Ensure index exists
+            try:
+                store.initialize(index_name, embedding_model=embedding_model, chunk_strategy=chunk_strategy)
+            except Exception as exc:
+                per_index_results.append({
+                    "index_name": index_name, "status": "error",
+                    "message": f"Failed to create index: {exc}",
+                })
+                continue
+
+            # Dedup state
+            already_indexed_urls = _get_indexed_urls(store, index_name)
+            indexed_file_dates = _get_indexed_file_names_with_dates(store, index_name)
+
+            files_processed = 0
+            files_skipped_count = 0
+            files_updated = 0
+            chunks_created = 0
+
+            for file_info in file_infos:
+                url = file_info.get("source_url", "")
+                file_name = file_info.get("file_name", "")
+                file_updated_at = _parse_date_str(file_info.get("updated_at", ""))
+
+                # Dedup
+                if url and url in already_indexed_urls:
+                    files_skipped_count += 1
+                    continue
+                if file_name and file_name in indexed_file_dates:
+                    stored_date = indexed_file_dates[file_name]
+                    if stored_date == file_updated_at:
+                        files_skipped_count += 1
+                        continue
+                    store.delete_chunks_by_file_name(file_name, index_name)
+                    files_updated += 1
+                    already_indexed_urls = {u for u in already_indexed_urls if u != url}
+
+                if max_files_per_index and files_processed >= max_files_per_index:
+                    break
+
+                print(f"[auto]   Processing: {file_name}")
+                try:
+                    text = extract_from_url(url, drive_service)
+                    if not text.strip():
+                        continue
+                    if len(text) > _MAX_FILE_CHARS:
+                        text = text[:_MAX_FILE_CHARS]
+
+                    chunks = chunk_text(text, strategy=chunk_strategy, **chunk_params)
+                    if not chunks:
+                        continue
+
+                    from hybrid.ingestion.metadata import detect_language
+                    _sample = text[:5000]
+                    doc_language = detect_language(_sample)
+                    # Use the notion folder name as domaine instead of keyword detection
+                    doc_domaine = notion.upper()
+
+                    texts_to_embed = [c["content"] for c in chunks]
+                    embeddings = _embed_in_batches(embedder, texts_to_embed, batch_size=64)
+
+                    records: list[dict] = []
+                    for chunk, embedding in zip(chunks, embeddings):
+                        meta = build_metadata(
+                            file_info=file_info,
+                            chunk=chunk,
+                            embedding_model=embedding_model,
+                            index_name=index_name,
+                            embedding_dim=emb_dim,
+                            doc_language=doc_language,
+                            doc_domaine=doc_domaine,
+                        )
+                        meta["embedding"] = embedding
+                        records.append(meta)
+
+                    store.insert_chunks(records)
+                    files_processed += 1
+                    chunks_created += len(records)
+
+                except Exception as exc:
+                    print(f"[auto]   ERROR: {file_name} → {exc}")
+
+            total_files += files_processed
+            total_chunks += chunks_created
+            per_index_results.append({
+                "index_name": index_name,
+                "status": "success",
+                "files_processed": files_processed,
+                "files_already_indexed": files_skipped_count,
+                "files_updated": files_updated,
+                "chunks_created": chunks_created,
+            })
+            print(f"[auto]   Done: {files_processed} files, {chunks_created} chunks")
+
+    return {
+        "status": "success",
+        "message": (
+            f"Auto-ingestion complete. {len(per_index_results)} index(es) processed, "
+            f"{total_files} file(s), {total_chunks} chunk(s) created."
+        ),
+        "indexes": per_index_results,
+        "total_files": total_files,
+        "total_chunks": total_chunks,
+    }

@@ -18,6 +18,12 @@ from __future__ import annotations
 INDEX_SEP = "__"
 
 
+def _is_catchall(notion: str) -> bool:
+    """Return True if the notion name looks like a catch-all / miscellaneous index."""
+    _CATCHALL_KEYWORDS = {"divers", "misc", "autre", "other", "general", "divers"}
+    return any(kw in notion.lower() for kw in _CATCHALL_KEYWORDS)
+
+
 def expand_company_indexes(names: list[str], available: list[str]) -> list[str]:
     """
     Expand company-level names into all their ``company__notion`` sub-indexes.
@@ -25,6 +31,10 @@ def expand_company_indexes(names: list[str], available: list[str]) -> list[str]:
     If a name in *names* is not a full ``company__notion`` index but matches
     the company prefix of available indexes, it is expanded.  Already-valid
     index names are kept as-is.
+
+    **Catch-all indexes** (containing "divers", "misc", "autre", etc.) are
+    automatically included whenever any index of the same company is selected,
+    because miscellaneous folders may contain misfiled documents.
 
     Args:
         names:     Index names returned by the LLM or substring match.
@@ -35,17 +45,23 @@ def expand_company_indexes(names: list[str], available: list[str]) -> list[str]:
     """
     result: list[str] = []
     seen: set[str] = set()
+    companies_seen: set[str] = set()
+
     for name in names:
         if name in available:
             # Exact match — keep it
             if name not in seen:
                 result.append(name)
                 seen.add(name)
+            # Track company for catch-all inclusion
+            if INDEX_SEP in name:
+                companies_seen.add(name.split(INDEX_SEP, 1)[0])
         else:
             # Try as company prefix: "celio" → all "celio__*"
             prefix = name + INDEX_SEP
             expanded = [a for a in available if a.startswith(prefix)]
             if expanded:
+                companies_seen.add(name)
                 for idx in expanded:
                     if idx not in seen:
                         result.append(idx)
@@ -58,6 +74,19 @@ def expand_company_indexes(names: list[str], available: list[str]) -> list[str]:
                     if idx not in seen:
                         result.append(idx)
                         seen.add(idx)
+                    if INDEX_SEP in idx:
+                        companies_seen.add(idx.split(INDEX_SEP, 1)[0])
+
+    # Always include catch-all indexes for any company we're querying
+    for company in companies_seen:
+        prefix = company + INDEX_SEP
+        for a in available:
+            if a.startswith(prefix) and a not in seen:
+                notion = a.split(INDEX_SEP, 1)[1]
+                if _is_catchall(notion):
+                    result.append(a)
+                    seen.add(a)
+
     return result
 
 
@@ -91,15 +120,28 @@ def resolve_indexes(query: str, available: list[str]) -> list[str]:
         "sélectionner tous ses sous-index, ou un index précis (ex: 'celio__rh').\n\n"
     )
 
+    # Extract company names for the prompt
+    company_names = sorted({
+        name.split(INDEX_SEP, 1)[0] for name in available if INDEX_SEP in name
+    })
+
     prompt = (
         f"Index disponibles : {', '.join(available)}\n"
         f"{hierarchy_hint}"
+        f"Entreprises connues : {', '.join(company_names)}\n\n"
         f"Requête : \"{query}\"\n\n"
-        "Sélectionne le ou les index thématiquement pertinents pour répondre à cette requête.\n"
-        "- Analyse le sujet de la requête et choisis uniquement les index dont le contenu "
-        "pourrait contenir la réponse.\n"
-        "- Tu peux retourner un seul index ou plusieurs si la question couvre plusieurs domaines.\n"
-        "- Ne retourne PAS tous les index par défaut : sois sélectif.\n"
+        "Sélectionne le ou les index pertinents pour répondre à cette requête.\n\n"
+        "Règles STRICTES (dans cet ordre) :\n"
+        "1. La requête mentionne-t-elle EXPLICITEMENT le nom d'une entreprise connue "
+        f"({', '.join(company_names)}) ?\n"
+        "   - OUI → retourne les index pertinents de CETTE entreprise (domaine + divers)\n"
+        "   - NON → retourne TOUS les index de TOUTES les entreprises\n"
+        "2. Un nom de produit, un sujet ou un thème ne suffit PAS à identifier une entreprise. "
+        "Seul le nom exact de l'entreprise compte.\n"
+        "3. Les index contenant 'divers', 'misc' ou 'autre' doivent TOUJOURS être inclus "
+        "dès qu'au moins un index de la même entreprise est sélectionné.\n"
+        "4. En cas de doute, retourne TOUS les index — il vaut mieux chercher trop large "
+        "que rater l'information.\n\n"
         "Réponds UNIQUEMENT avec les noms d'index séparés par des virgules, "
         "en minuscules, sans explication."
     )

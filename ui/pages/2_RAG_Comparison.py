@@ -81,6 +81,152 @@ def _generate_answer(query: str, context: str) -> str:
         return f"_(Erreur de génération : {exc})_"
 
 
+# ── Source highlighting in generated answers ─────────────────────────────────
+
+def _highlight_sources(text: str, sources: list[dict]) -> str:
+    """
+    Post-process a generated answer to turn source citations in parentheses
+    into highlighted green badges. Handles Gemini's actual output:
+    - (INDEX__NOTION - FileName, detail)
+    - (INDEX__NOTION - FileName ; INDEX__NOTION - FileName2)
+    - (FileName.pdf)
+    """
+    import re
+
+    if not text:
+        return text
+
+    # Build lookup: file name → source_url
+    source_map: dict[str, str] = {}
+    for s in (sources or []):
+        fname = s.get("file_name", "")
+        url = s.get("source_url", "") or s.get("uri", "")
+        if fname and url:
+            source_map[fname.lower()] = url
+            stem = fname.rsplit(".", 1)[0] if "." in fname else fname
+            source_map[stem.lower()] = url
+
+    _BADGE_LINK = (
+        '<a href="{url}" target="_blank" '
+        'style="background:#E6F4ED;color:#006A4E;padding:2px 8px;'
+        'border-radius:4px;font-size:0.82em;text-decoration:none;'
+        'border:1px solid #006A4E30;white-space:normal;'
+        'margin:0 2px">{label}</a>'
+    )
+    _BADGE_SPAN = (
+        '<span style="background:#E6F4ED;color:#006A4E;padding:2px 8px;'
+        'border-radius:4px;font-size:0.82em;'
+        'border:1px solid #006A4E30;white-space:normal;'
+        'margin:0 2px">{label}</span>'
+    )
+
+    def _find_url(citation: str) -> str:
+        parts = citation.split(" - ", 1)
+        file_part = parts[-1].strip() if len(parts) > 1 else citation.strip()
+        file_core = file_part.split(",")[0].strip()
+        for candidate in [file_core, file_part]:
+            key = candidate.lower()
+            if key in source_map:
+                return source_map[key]
+            stem = key.rsplit(".", 1)[0] if "." in key else key
+            if stem in source_map:
+                return source_map[stem]
+        for known, u in source_map.items():
+            if file_core.lower() in known or known in file_core.lower():
+                return u
+        return ""
+
+    def _make_badge(citation: str) -> str:
+        parts = citation.split(" - ", 1)
+        label = parts[-1].strip() if len(parts) > 1 else citation.strip()
+        url = _find_url(citation)
+        if url:
+            return _BADGE_LINK.format(url=url, label=label)
+        return _BADGE_SPAN.format(label=label)
+
+    def _replace_parens(match):
+        inner = match.group(1).strip()
+        citations = [c.strip() for c in inner.split(";") if c.strip()]
+        badges = [_make_badge(c) for c in citations]
+        return " " + " ".join(badges)
+
+    # Match parentheses containing __ (index references)
+    result = re.sub(r'\(([^()]*__[^()]*)\)', _replace_parens, text)
+    # Match parentheses containing file extensions
+    result = re.sub(r'\(([^()]*\.(?:pdf|docx|xlsx|pptx|doc|txt)[^()]*)\)', _replace_parens, result)
+
+    return result
+
+
+def _md_to_html(text: str) -> str:
+    """Lightweight markdown to HTML for Gemini output."""
+    import re
+    lines = text.split("\n")
+    html_lines: list[str] = []
+    in_ul = False
+    in_ol = False
+
+    for line in lines:
+        stripped = line.strip()
+        if in_ul and not stripped.startswith(("- ", "* ")):
+            html_lines.append("</ul>")
+            in_ul = False
+        if in_ol and not re.match(r'^\d+[\.\)]\s', stripped):
+            html_lines.append("</ol>")
+            in_ol = False
+        if stripped.startswith("#### "):
+            html_lines.append(f"<h4>{stripped[5:]}</h4>")
+        elif stripped.startswith("### "):
+            html_lines.append(f"<h3>{stripped[4:]}</h3>")
+        elif stripped.startswith("## "):
+            html_lines.append(f"<h2>{stripped[3:]}</h2>")
+        elif stripped.startswith("# "):
+            html_lines.append(f"<h1>{stripped[2:]}</h1>")
+        elif stripped.startswith(("- ", "* ")):
+            if not in_ul:
+                html_lines.append("<ul>")
+                in_ul = True
+            html_lines.append(f"<li>{stripped[2:]}</li>")
+        elif re.match(r'^\d+[\.\)]\s', stripped):
+            if not in_ol:
+                html_lines.append("<ol>")
+                in_ol = True
+            content = re.sub(r'^\d+[\.\)]\s', '', stripped)
+            html_lines.append(f"<li>{content}</li>")
+        elif not stripped:
+            html_lines.append("<br>")
+        else:
+            html_lines.append(f"<p style='margin:4px 0'>{stripped}</p>")
+    if in_ul:
+        html_lines.append("</ul>")
+    if in_ol:
+        html_lines.append("</ol>")
+    result = "\n".join(html_lines)
+    result = re.sub(r'\*\*\*', '<hr style="border:none;border-top:1px solid #D4E8DC;margin:16px 0">', result)
+    result = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', result)
+    result = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<em>\1</em>', result)
+    return result
+
+
+def _render_answer(text: str, sources: list[dict]) -> None:
+    """Render a generated answer with highlighted source badges.
+    Uses st.html() so <a> links are preserved (st.markdown strips them).
+    """
+    if not text:
+        st.markdown("_Aucune réponse générée._")
+        return
+    html_body = _md_to_html(text)
+    highlighted = _highlight_sources(html_body, sources)
+    st.html(
+        f'<div style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;'
+        f'font-size:15px;line-height:1.7;color:#1A1A1A;'
+        f'overflow-x:hidden;overflow-wrap:break-word;word-break:break-word;'
+        f'max-width:100%;box-sizing:border-box">'
+        f'{highlighted}'
+        f'</div>'
+    )
+
+
 # ── Index resolver ────────────────────────────────────────────────────────────
 
 def _resolve_indexes(query: str, available: list[str]) -> list[str]:
@@ -321,7 +467,7 @@ def _render_vertex(result: dict, is_drive_url: bool = False) -> None:
         return
 
     st.caption(f"{elapsed}s")
-    st.markdown(result.get("answer") or "_Aucune réponse générée._")
+    _render_answer(result.get("answer", ""), result.get("sources", []))
     st.divider()
     render_sources(result.get("sources", []), pipeline="vertex")
 
@@ -372,9 +518,8 @@ def _render_hybrid_mono(result: dict, indexes_used: list[str]) -> None:
         st.caption(f"_{timing_detail}_")
     if retrieval_query:
         st.caption(f"query retrieval : _{retrieval_query}_")
-    # Réponse générée par Gemini
     generated = result.get("generated_answer", "")
-    st.markdown(generated if generated else "_Aucune réponse générée._")
+    _render_answer(generated, result.get("sources", []))
     st.divider()
     render_sources(result.get("sources", []), pipeline="hybrid")
     with st.expander("Chunks récupérés", expanded=False):
@@ -445,9 +590,8 @@ def _render_hybrid_multi(result: dict, indexes_used: list[str]) -> None:
         st.caption(f"_{timing_detail}_")
     if retrieval_query:
         st.caption(f"query retrieval : _{retrieval_query}_")
-    # Réponse générée par Gemini (sur le contexte fusionné de tous les index)
     generated = result.get("generated_answer", "")
-    st.markdown(generated if generated else "_Aucune réponse générée._")
+    _render_answer(generated, result.get("sources", []))
     st.divider()
     # Détail par index dans un expander
     with st.expander("Détail par index", expanded=False):

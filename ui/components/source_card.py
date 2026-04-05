@@ -22,7 +22,7 @@ def render_sources(sources: list[dict], pipeline: str = "hybrid") -> None:
         pipeline: "vertex" or "hybrid" — controls which keys to read.
     """
     if not sources:
-        st.caption("_Aucune source disponible._")
+        st.caption("_No sources available._")
         return
 
     st.markdown("**Sources**")
@@ -56,7 +56,7 @@ def render_chunks(chunks: list[dict], collapsed: bool = True) -> None:
     if not chunks:
         return
 
-    st.markdown("**Chunks récupérés**")
+    st.markdown("**Retrieved chunks**")
     for i, chunk in enumerate(chunks):
         score        = chunk.get("rrf_score") or chunk.get("score", 0)
         score_dense  = chunk.get("score_dense")
@@ -70,13 +70,13 @@ def render_chunks(chunks: list[dict], collapsed: bool = True) -> None:
             with col_l:
                 st.text(content[:800] + ("…" if len(content) > 800 else ""))
             with col_r:
-                st.caption(f"**Domaine** : {chunk.get('domaine', '—')}")
-                st.caption(f"**Langue**  : {chunk.get('langue', '—')}")
-                st.caption(f"**Type**    : {chunk.get('file_type', '—')}")
-                st.caption(f"**RRF**     : {score:.4f}")
+                st.caption(f"**Topic**    : {chunk.get('domaine', '—')}")
+                st.caption(f"**Language** : {chunk.get('langue', '—')}")
+                st.caption(f"**Type**     : {chunk.get('file_type', '—')}")
+                st.caption(f"**RRF**      : {score:.4f}")
                 if score_dense is not None:
-                    st.caption(f"**Cosinus** : {score_dense:.4f}")
+                    st.caption(f"**Cosine**   : {score_dense:.4f}")
                 if score_sparse is not None:
-                    st.caption(f"**BM25**    : {score_sparse:.4f}")
+                    st.caption(f"**BM25**     : {score_sparse:.4f}")
                 if chunk.get("source_url"):
-                    st.markdown(f"[Ouvrir]({chunk['source_url']})")
+                    st.markdown(f"[Open]({chunk['source_url']})")

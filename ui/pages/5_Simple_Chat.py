@@ -62,7 +62,7 @@ with st.sidebar:
 
     # ── Toggle RAG ────────────────────────────────────────────────────────────
     rag_on = st.toggle(
-        "RAG activé",
+        "RAG enabled",
         value=st.session_state.sc_rag_on,
     )
 
@@ -109,7 +109,7 @@ with st.sidebar:
                     _clear()
                     st.rerun()
             else:
-                st.warning("Aucun corpus disponible.")
+                st.warning("No corpus available.")
                 st.session_state.sc_corpus = None
 
         else:  # Hybrid RAG
@@ -120,31 +120,31 @@ with st.sidebar:
                 _idx_names = []
 
             if _idx_names:
-                st.markdown("**Index disponibles**")
+                st.markdown("**Available indexes**")
                 for n in _idx_names:
                     st.caption(f"· {n}")
                 st.caption(
-                    "_Index détectés automatiquement dans votre question. "
-                    "Tous interrogés par défaut._"
+                    "_Indexes detected automatically from your question. "
+                    "All queried by default._"
                 )
             else:
-                st.warning("Aucun index disponible.")
+                st.warning("No indexes available.")
 
     st.divider()
 
-    if st.button("Nouvelle conversation", use_container_width=True, type="primary"):
+    if st.button("New conversation", use_container_width=True, type="primary"):
         _clear()
         st.rerun()
 
     # ── Status badge ──────────────────────────────────────────────────────────
     st.divider()
     if not rag_on:
-        st.info("Chatbot Gemini\nSans enrichissement RAG")
+        st.info("Chatbot Gemini\nWithout RAG enrichment")
     elif st.session_state.sc_pipeline == _PIPELINE_VERTEX:
         label = st.session_state.sc_corpus or "—"
-        st.success(f"Naive RAG\nCorpus : **{label}**")
+        st.success(f"Naive RAG\nCorpus: **{label}**")
     else:
-        st.success("Hybrid RAG\nIndex détectés automatiquement")
+        st.success("Hybrid RAG\nIndexes auto-detected")
 
 
 # ── Page header ───────────────────────────────────────────────────────────────
@@ -152,16 +152,16 @@ with st.sidebar:
 st.title("Chat")
 
 if not rag_on:
-    st.caption("Réponse du modèle sans récupération de documents.")
+    st.caption("Model response without document retrieval.")
 elif st.session_state.sc_pipeline == _PIPELINE_VERTEX:
     st.caption(
-        f"Documents récupérés depuis le corpus Naive RAG "
+        f"Documents retrieved from Naive RAG corpus "
         f"**{st.session_state.sc_corpus or '—'}**."
     )
 else:
     st.caption(
-        "Documents récupérés depuis les index Hybrid — "
-        "index sélectionnés automatiquement selon votre question."
+        "Documents retrieved from Hybrid indexes — "
+        "indexes automatically selected based on your question."
     )
 
 # ── Chat history ──────────────────────────────────────────────────────────────
@@ -197,13 +197,13 @@ for msg in st.session_state.sc_messages:
 
 _ready = True
 if rag_on and st.session_state.sc_pipeline == _PIPELINE_VERTEX and not st.session_state.sc_corpus:
-    st.warning("Sélectionnez un corpus Naive RAG dans la barre latérale.")
+    st.warning("Select a Naive RAG corpus in the sidebar.")
     _ready = False
 
 _placeholder = (
-    "Posez votre question…"
+    "Ask your question..."
     if not rag_on
-    else "Posez votre question sur les documents…"
+    else "Ask a question about your documents..."
 )
 
 # ── Input & routing ───────────────────────────────────────────────────────────
@@ -216,7 +216,7 @@ if user_input:
 
     context = _build_context()
 
-    with st.spinner("Recherche en cours…"):
+    with st.spinner("Searching..."):
         try:
 
             # ── Sans RAG — Gemini direct ──────────────────────────────────────
@@ -226,7 +226,7 @@ if user_input:
                 pipeline = "hybrid"
 
                 if result.get("status") == "error":
-                    raise RuntimeError(result.get("message", "Erreur"))
+                    raise RuntimeError(result.get("message", "Error"))
 
                 answer  = result.get("answer", "")
                 elapsed = result.get("elapsed_s")
@@ -259,11 +259,11 @@ if user_input:
                     )
 
                     if result.get("status") == "error":
-                        raise RuntimeError(result.get("message", "Erreur Naive RAG find_similar"))
+                        raise RuntimeError(result.get("message", "Naive RAG find_similar error"))
 
                     similar = result.get("results", [])
                     elapsed = result.get("elapsed_s")
-                    answer  = f"Voici les **{len(similar)} documents** les plus similaires (Naive RAG RAG) :"
+                    answer  = f"Here are the **{len(similar)} most similar documents** (Naive RAG):"
 
                     with st.chat_message("assistant"):
                         st.markdown(answer)
@@ -295,7 +295,7 @@ if user_input:
                     )
 
                     if result.get("status") == "error":
-                        raise RuntimeError(result.get("message", "Erreur Naive RAG"))
+                        raise RuntimeError(result.get("message", "Naive RAG error"))
 
                     answer  = result.get("answer", "")
                     sources = result.get("sources", [])
@@ -329,7 +329,7 @@ if user_input:
 
                 all_indexes = [i["index_name"] for i in list_indexes()]
                 if not all_indexes:
-                    raise RuntimeError("Aucun index Hybrid disponible.")
+                    raise RuntimeError("No Hybrid indexes available.")
 
                 _drive_url = re.search(
                     r"https?://(?:drive|docs)\.google\.com/\S+", user_input, re.IGNORECASE
@@ -346,7 +346,7 @@ if user_input:
                     elapsed = round(time.perf_counter() - t0, 2)
 
                     if result.get("status") == "error":
-                        raise RuntimeError(result.get("message", "Erreur find_similar"))
+                        raise RuntimeError(result.get("message", "Error find_similar"))
 
                     similar_docs = result.get("results", [])
                     sources = [
@@ -354,8 +354,7 @@ if user_input:
                         for r in similar_docs
                     ]
                     answer = (
-                        f"Voici les **{len(similar_docs)} documents** les plus similaires "
-                        f"à votre document (recherche par similarité vectorielle) :"
+                        f"Here are the **{len(similar_docs)} most similar documents**:"
                     )
 
                     with st.chat_message("assistant"):
@@ -385,7 +384,7 @@ if user_input:
                 else:
                     from services.vertex_service import synthesize_from_context
 
-                    with st.spinner("Détection des index pertinents…"):
+                    with st.spinner("Detecting relevant indexes..."):
                         target_indexes = resolve_indexes(user_input, all_indexes)
 
                     t0        = time.perf_counter()
@@ -396,7 +395,7 @@ if user_input:
                     )
 
                     if retrieval.get("status") == "error":
-                        raise RuntimeError(retrieval.get("message", "Erreur Hybrid"))
+                        raise RuntimeError(retrieval.get("message", "Hybrid error"))
 
                     synth = synthesize_from_context(
                         query_text=user_input,
@@ -405,7 +404,7 @@ if user_input:
                     )
 
                     if synth.get("status") == "error":
-                        raise RuntimeError(synth.get("message", "Erreur de synthèse"))
+                        raise RuntimeError(synth.get("message", "Synthesis error"))
 
                     answer  = synth.get("answer", "")
                     sources = retrieval.get("sources", [])
@@ -432,7 +431,7 @@ if user_input:
                                 render_chunks(chunks)
                         caption = f"{elapsed}s · {index_label}"
                         if retrieval_query and retrieval_query != user_input:
-                            caption += f" · query : _{retrieval_query}_"
+                            caption += f" · query: _{retrieval_query}_"
                         st.caption(caption)
 
                     st.session_state.sc_messages.append({

@@ -45,10 +45,10 @@ os.makedirs(EVAL_HISTORY_DIR, exist_ok=True)
 
 METRIC_LABELS    = {"ndcg": "nDCG@10", "mrr": "MRR", "recall": "Recall@10", "precision": "Precision@10"}
 METRIC_HELP      = {
-    "ndcg":      "Qualité globale du classement (1.0 = parfait). Métrique principale.",
-    "mrr":       "Le bon chunk est-il en première position ?",
-    "recall":    "Tous les bons chunks sont-ils retrouvés dans le top-10 ?",
-    "precision": "Parmi les 10 résultats, quelle fraction est pertinente ?",
+    "ndcg":      "Overall ranking quality (1.0 = perfect). Primary metric.",
+    "mrr":       "Is the right chunk ranked first?",
+    "recall":    "Are all relevant chunks found in the top 10?",
+    "precision": "What fraction of the top 10 results is relevant?",
 }
 MODEL_LABELS     = {"minilm-384": "MiniLM-384", "mpnet-768": "MPNet-768",
                     "e5-large-1024": "E5-Large-1024", "bge-m3": "BGE-M3", "vertex": "Naive (Google)"}
@@ -171,7 +171,7 @@ def _load_sheet(sheet_url: str) -> list[dict]:
     if not m:
         m = re.search(r"/d/([a-zA-Z0-9_-]+)", sheet_url)
     if not m:
-        raise ValueError("Impossible d'extraire l'ID du fichier depuis l'URL.")
+        raise ValueError("Unable to extract the file ID from the URL.")
     file_id = m.group(1)
 
     creds = service_account.Credentials.from_service_account_file(
@@ -238,20 +238,19 @@ def _check_answer(expected: str, actual: str, sources: list | None = None) -> bo
             ]
             src_names = ", ".join(n for n in names if n)
 
-        sources_line = f"Sources retournées par le modèle : {src_names}\n" if src_names else ""
+        sources_line = f"Sources returned by the model: {src_names}\n" if src_names else ""
 
         r = GenerativeModel("gemini-2.0-flash-001").generate_content(
-            f"Réponse de référence : {expected}\n"
-            f"Réponse du modèle : {actual}\n"
+            f"Expected answer: {expected}\n"
+            f"Model answer: {actual}\n"
             f"{sources_line}\n"
-            "La réponse du modèle (texte et/ou sources) contient-elle l'information factuelle clé "
-            "de la réponse de référence, même si la formulation est différente ? "
-            "Si la réponse de référence désigne un document ou une source, vérifie aussi dans "
-            "les sources retournées. "
-            "Sois tolérant sur la formulation : si le fait principal est présent, réponds OUI. "
-            "Réponds UNIQUEMENT par OUI ou NON, sans explication."
+            "Does the model's answer (text and/or sources) contain the key factual information "
+            "from the expected answer, even if the wording is different? "
+            "If the expected answer refers to a document or source, also check the returned sources. "
+            "Be lenient with wording: if the main fact is present, answer YES. "
+            "Answer ONLY YES or NO, without explanation."
         )
-        return r.text.strip().upper().startswith("OUI")
+        return r.text.strip().upper().startswith("YES")
     except Exception:
         return False
 
@@ -318,10 +317,10 @@ def _render_pipeline_result(
 ) -> None:
     """Render one pipeline result with pre-computed ✅/❌ badges."""
     if result.get("status") == "skipped":
-        st.caption("_Non disponible_")
+        st.caption("_Not available_")
         return
     if result.get("status") == "error":
-        st.error(result.get("message", "Erreur"))
+        st.error(result.get("message", "Error"))
         return
 
     answer_text = result.get("generated_answer") or result.get("answer", "")
@@ -345,16 +344,16 @@ def _render_pipeline_result(
 
     col_a, col_s = st.columns(2)
     with col_a:
-        st.markdown(f"**Réponse** {a_icon}")
+        st.markdown(f"**Answer** {a_icon}")
     with col_s:
         st.markdown(f"**Source** {s_icon}")
 
-    with st.expander("Voir la réponse", expanded=False):
-        st.markdown(answer_text or "_Aucune réponse_")
+    with st.expander("View answer", expanded=False):
+        st.markdown(answer_text or "_No answer_")
         if sources or chunks:
             src_list = sources or chunks
             names = [s.get("file_name", s.get("title", s.get("uri", ""))) for s in src_list[:3]]
-            st.caption("Sources : " + " · ".join(n for n in names if n))
+            st.caption("Sources: " + " · ".join(n for n in names if n))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -363,7 +362,7 @@ def _render_pipeline_result(
 
 st.title("Benchmark")
 
-tab1, tab2 = st.tabs(["Résultats retrieval", "Évaluation base de connaissances"])
+tab1, tab2 = st.tabs(["Retrieval Results", "Knowledge Base Evaluation"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -375,15 +374,15 @@ with tab1:
 
     if df_bench is None or df_bench.empty:
         st.warning(
-            "Aucun résultat de benchmark trouvé.\n\n"
-            "Lance le benchmark avec :\n"
+            "No benchmark results found.\n\n"
+            "Run the benchmark with:\n"
             "```bash\n"
             "python -m hybrid.benchmark.eval_retrieval\n"
             "```"
         )
     if not bench_active:
          st.warning(
-            "Le benchmark des modèles d’embedding est actuellement désactivé.\n\n" 
+            "Embedding model benchmark is currently disabled.\n\n"
         )
     else:
          if bench_active:   
@@ -391,17 +390,17 @@ with tab1:
                 st.header("Benchmark")
                 st.divider()
                 selected_metric = st.selectbox(
-                    "Métrique principale", list(METRIC_LABELS.keys()),
+                    "Primary metric", list(METRIC_LABELS.keys()),
                     format_func=lambda k: METRIC_LABELS[k],
                 )
                 st.caption(METRIC_HELP[selected_metric])
                 st.divider()
                 st.markdown("**Filtres**")
-                emb_filter = st.multiselect("Modèles d'embedding",
+                emb_filter = st.multiselect("Embedding models",
                     options=sorted(df_bench["embedding"].unique()),
                     default=sorted(df_bench["embedding"].unique()),
                     format_func=lambda k: MODEL_LABELS.get(k, k))
-                chunk_filter = st.multiselect("Stratégies de chunking",
+                chunk_filter = st.multiselect("Chunking strategies",
                     options=sorted(df_bench["chunking"].unique()),
                     default=sorted(df_bench["chunking"].unique()),
                     format_func=lambda k: CHUNK_LABELS.get(k, k))
@@ -416,19 +415,19 @@ with tab1:
                 df_bench["retrieval"].isin(retrieval_filter)
             ].reset_index(drop=True)
 
-            if st.button("Recharger", type="secondary", key="reload_t1"):
+            if st.button("Reload", type="secondary", key="reload_t1"):
                 _load_benchmark.clear(); st.rerun()
 
-            st.caption(f"{len(df_bench)} combinaisons · `hybrid/data/benchmark_results.json`")
+            st.caption(f"{len(df_bench)} combinations · `hybrid/data/benchmark_results.json`")
             st.divider()
 
             if filtered.empty:
-                st.warning("Aucun résultat avec les filtres sélectionnés.")
+                st.warning("No results match the selected filters.")
             else:
                 mc = selected_metric
                 ml = METRIC_LABELS[mc]
 
-                st.subheader(f"Podium — Top 3 par {ml}")
+                st.subheader(f"Podium — Top 3 by {ml}")
                 for i, (_, row) in enumerate(filtered.head(3).iterrows()):
                     with st.columns(3)[i]:
                         st.markdown(
@@ -446,21 +445,21 @@ with tab1:
                         )
                 st.divider()
 
-                st.subheader("Leaderboard complet")
+                st.subheader("Full leaderboard")
                 dd = filtered[["label","ndcg","mrr","recall","precision"]].copy()
                 dd.index = range(1, len(dd)+1)
-                dd.columns = ["Combinaison","nDCG@10","MRR","Recall@10","Precision@10"]
+                dd.columns = ["Combination","nDCG@10","MRR","Recall@10","Precision@10"]
                 st.dataframe(_style_df(dd, ["nDCG@10","MRR","Recall@10","Precision@10"]),
                             use_container_width=True, height=min(400, 45+35*len(dd)))
-                st.caption(">= 0.90 (vert)  >= 0.70 (jaune)  < 0.70 (rouge)")
+                st.caption(">= 0.90 (green)  >= 0.70 (yellow)  < 0.70 (red)")
                 st.divider()
 
                 for grp_col, grp_label, label_map in [
-                    ("embedding", "modèle d'embedding", MODEL_LABELS),
-                    ("chunking",  "stratégie de chunking", CHUNK_LABELS),
-                    ("retrieval", "mode de retrieval", RETRIEVAL_LABELS),
+                    ("embedding", "embedding model", MODEL_LABELS),
+                    ("chunking",  "chunking strategy", CHUNK_LABELS),
+                    ("retrieval", "retrieval mode", RETRIEVAL_LABELS),
                 ]:
-                    st.subheader(f"Comparatif par {grp_label} — meilleur {ml}")
+                    st.subheader(f"Comparison by {grp_label} — best {ml}")
                     best = (filtered.groupby(grp_col)[mc].max().reset_index()
                             .sort_values(mc, ascending=False))
                     best["_lbl"] = best[grp_col].map(label_map).fillna(best[grp_col])
@@ -468,7 +467,7 @@ with tab1:
                                 color=HYBRID_COLOR, height=260)
                     st.divider()
 
-                st.subheader(f"Heatmap — {ml} par embedding × chunking")
+                st.subheader(f"Heatmap — {ml} by embedding x chunking")
                 hm = (filtered.groupby(["embedding","chunking"])[mc].max().unstack("chunking"))
                 hm.index   = hm.index.map(lambda k: MODEL_LABELS.get(k, k))
                 hm.columns = [CHUNK_LABELS.get(c, c) for c in hm.columns]
@@ -479,16 +478,16 @@ with tab1:
                     if v >= 0.6:  return "background-color:#ffc107;color:#856404"
                     return "background-color:#dc3545;color:white"
                 st.dataframe(hm.style.applymap(_hc).format("{:.4f}", na_rep="—"), use_container_width=True)
-                st.caption(">= 0.90 (vert foncé)  >= 0.75 (vert clair)  >= 0.60 (jaune)  < 0.60 (rouge)")
+                st.caption(">= 0.90 (dark green)  >= 0.75 (light green)  >= 0.60 (yellow)  < 0.60 (red)")
                 st.divider()
 
-                st.subheader("Recommandation")
+                st.subheader("Recommendation")
                 best_row = filtered.iloc[0]
                 st.success(
-                    f"**Meilleure combinaison** ({ml} = {best_row[mc]:.4f})  \n"
-                    f"**Embedding :** {MODEL_LABELS.get(best_row['embedding'], best_row['embedding'])}  \n"
-                    f"**Chunking :** {CHUNK_LABELS.get(best_row['chunking'], best_row['chunking'])}  \n"
-                    f"**Retrieval :** {RETRIEVAL_LABELS.get(best_row['retrieval'], best_row['retrieval'])}"
+                    f"**Best combination** ({ml} = {best_row[mc]:.4f})  \n"
+                    f"**Embedding:** {MODEL_LABELS.get(best_row['embedding'], best_row['embedding'])}  \n"
+                    f"**Chunking:** {CHUNK_LABELS.get(best_row['chunking'], best_row['chunking'])}  \n"
+                    f"**Retrieval:** {RETRIEVAL_LABELS.get(best_row['retrieval'], best_row['retrieval'])}"
                 )
 
 
@@ -497,17 +496,17 @@ with tab1:
 # ─────────────────────────────────────────────────────────────────────────────
 
 with tab2:
-    st.subheader("Évaluation de la base de connaissances")
+    st.subheader("Knowledge Base Evaluation")
     st.caption(
-        "Pour chaque question du Google Sheet, les deux pipelines tournent en parallèle. "
-        "Les résultats s'affichent dès qu'ils sont prêts avec ✅/❌ pour la réponse et la source."
+        "For each question in the Google Sheet, both pipelines run in parallel. "
+        "Results are displayed as they complete, with a pass/fail indicator for the answer and the source."
     )
 
     # ── Config inputs ─────────────────────────────────────────────────────────
     sheet_url = st.text_input(
         "URL Google Sheet",
         placeholder="https://docs.google.com/spreadsheets/d/...",
-        help="Colonnes : ID, Catégorie, Question, Réponse attendue, Fichier(s) source(s), Difficulté, Type",
+        help="Columns: ID, Category, Question, Expected answer, Source file(s), Difficulty, Type",
         key="eval_sheet_url",
     )
 
@@ -528,24 +527,24 @@ with tab2:
         else:
             eval_corpus = st.text_input("Corpus Naive RAG (nom)", key="eval_corpus_txt", placeholder="base-rag")
 
-    eval_pipeline = "Les deux"   
+    eval_pipeline = "Both"
 
-    run_btn = st.button("Lancer l'évaluation", type="primary",
+    run_btn = st.button("Run evaluation", type="primary",
                         disabled=not sheet_url, key="eval_run")
 
     if run_btn and sheet_url:
         # ── Load questions ────────────────────────────────────────────────────
-        with st.spinner("Chargement du Google Sheet…"):
+        with st.spinner("Loading Google Sheet..."):
             try:
                 questions = _load_sheet(sheet_url)
             except Exception as exc:
-                st.error(f"Impossible de lire le sheet : {exc}")
+                st.error(f"Unable to read the sheet: {exc}")
                 questions = []
 
         if not questions:
-            st.error("Aucune question trouvée. Vérifiez l'URL et les permissions.")
+            st.error("No questions found. Check the URL and permissions.")
         else:
-            st.caption(f"{len(questions)} questions — démarrage…")
+            st.caption(f"{len(questions)} questions — starting...")
             st.divider()
 
             # Init vertex once
@@ -582,9 +581,9 @@ with tab2:
 
                 col_h, col_v = st.columns(2)
                 with col_h:
-                    h_ph = st.empty(); h_ph.info("Hybrid en cours…")
+                    h_ph = st.empty(); h_ph.info("Hybrid in progress...")
                 with col_v:
-                    v_ph = st.empty(); v_ph.info("Naive RAG en cours…")
+                    v_ph = st.empty(); v_ph.info("Naive RAG in progress...")
 
                 h_ao = h_so = v_ao = v_so = None
                 h_ans_txt = v_ans_txt = ""
@@ -651,11 +650,11 @@ with tab2:
                 })
 
                 score_ph.markdown(
-                    f"**Score en cours** ({idx+1}/{len(questions)}) — "
+                    f"**Score in progress** ({idx+1}/{len(questions)}) — "
                     f"<span style='color:{HYBRID_COLOR}'>Hybrid</span> "
-                    f"Réponse {_pct(scores['H_answer'])} · Source {_pct(scores['H_source'])} &nbsp;|&nbsp; "
+                    f"Answer {_pct(scores['H_answer'])} · Source {_pct(scores['H_source'])} &nbsp;|&nbsp; "
                     f"<span style='color:{VERTEX_COLOR}'>Naive</span> "
-                    f"Réponse {_pct(scores['V_answer'])} · Source {_pct(scores['V_source'])}",
+                    f"Answer {_pct(scores['V_answer'])} · Source {_pct(scores['V_source'])}",
                     unsafe_allow_html=True,
                 )
                 st.divider()
@@ -663,33 +662,33 @@ with tab2:
             # ── Final score ───────────────────────────────────────────────
             score_ph.empty()
             final_scores = {k: _pct(v) for k, v in scores.items()}
-            st.subheader("Résultat final")
+            st.subheader("Final results")
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Hybrid — Réponse", final_scores["H_answer"])
+            m1.metric("Hybrid — Answer", final_scores["H_answer"])
             m2.metric("Hybrid — Source",  final_scores["H_source"])
-            m3.metric("Naive — Réponse", final_scores["V_answer"])
+            m3.metric("Naive — Answer", final_scores["V_answer"])
             m4.metric("Naive — Source",  final_scores["V_source"])
 
             # ── Save run ──────────────────────────────────────────────────
             saved_path = _save_eval_run(all_rows, eval_pipeline, sheet_url, final_scores)
-            st.success(f"Résultats sauvegardés → `{os.path.basename(saved_path)}`")
+            st.success(f"Results saved to `{os.path.basename(saved_path)}`")
 
     # ── Historique des runs ────────────────────────────────────────────────────
     st.divider()
-    st.subheader("Historique des évaluations")
+    st.subheader("Evaluation history")
 
     runs = _list_eval_runs()
     if not runs:
-        st.caption("Aucun run sauvegardé.")
+        st.caption("No saved runs.")
     else:
         for run in runs:
             sc = run["scores"]
             label = (
                 f"`{run['timestamp']}` · {run['pipeline']} · {run['n']} questions  "
-                f"— H Rép {sc.get('H_answer','—')} · H Src {sc.get('H_source','—')} "
-                f"| V Rép {sc.get('V_answer','—')} · V Src {sc.get('V_source','—')}"
+                f"— H Ans {sc.get('H_answer','—')} · H Src {sc.get('H_source','—')} "
+                f"| V Ans {sc.get('V_answer','—')} · V Src {sc.get('V_source','—')}"
             )
-            if st.button(f"Charger {run['timestamp']}", key=f"load_{run['file']}"):
+            if st.button(f"Load {run['timestamp']}", key=f"load_{run['file']}"):
                 loaded = _load_eval_run(run["path"])
                 st.session_state["loaded_eval"] = loaded
                 st.rerun()
@@ -700,12 +699,12 @@ with tab2:
     if "loaded_eval" in st.session_state and not run_btn:
         run = st.session_state["loaded_eval"]
         st.divider()
-        st.subheader(f"Run chargé — {run.get('timestamp','')} · {run.get('pipeline','')}")
+        st.subheader(f"Loaded run — {run.get('timestamp','')} · {run.get('pipeline','')}")
         sc = run.get("scores", {})
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Hybrid — Réponse", sc.get("H_answer", "—"))
+        m1.metric("Hybrid — Answer", sc.get("H_answer", "—"))
         m2.metric("Hybrid — Source",  sc.get("H_source", "—"))
-        m3.metric("Naive — Réponse", sc.get("V_answer", "—"))
+        m3.metric("Naive — Answer", sc.get("V_answer", "—"))
         m4.metric("Naive — Source",  sc.get("V_source", "—"))
 
         def _ico(v): return ("✅" if v else "❌") if v is not None else "—"
@@ -720,22 +719,22 @@ with tab2:
                     f"— {row.get('question','')[:70]}",
                     expanded=False,
                 ):
-                    st.markdown(f"**Attendu :** {row.get('expected_answer','')}")
-                    st.markdown(f"**Source attendue :** `{row.get('expected_source','')}`")
+                    st.markdown(f"**Expected:** {row.get('expected_answer','')}")
+                    st.markdown(f"**Expected source:** `{row.get('expected_source','')}`")
                     c1, c2 = st.columns(2)
                     with c1:
                         st.markdown(
                             f"<span style='color:{HYBRID_COLOR}'>**Hybrid**</span> "
-                            f"Rép {_ico(row.get('h_answer_ok'))} · Src {_ico(row.get('h_source_ok'))} · {row.get('h_elapsed','?')}s",
+                            f"Ans {_ico(row.get('h_answer_ok'))} · Src {_ico(row.get('h_source_ok'))} · {row.get('h_elapsed','?')}s",
                             unsafe_allow_html=True,
                         )
                         st.caption(row.get("h_answer","")[:300])
-                        st.caption(f"Sources : {row.get('h_sources','—')}")
+                        st.caption(f"Sources: {row.get('h_sources','—')}")
                     with c2:
                         st.markdown(
                             f"<span style='color:{VERTEX_COLOR}'>**Vertex**</span> "
-                            f"Rép {_ico(row.get('v_answer_ok'))} · Src {_ico(row.get('v_source_ok'))} · {row.get('v_elapsed','?')}s",
+                            f"Ans {_ico(row.get('v_answer_ok'))} · Src {_ico(row.get('v_source_ok'))} · {row.get('v_elapsed','?')}s",
                             unsafe_allow_html=True,
                         )
                         st.caption(row.get("v_answer","")[:300])
-                        st.caption(f"Sources : {row.get('v_sources','—')}")
+                        st.caption(f"Sources: {row.get('v_sources','—')}")

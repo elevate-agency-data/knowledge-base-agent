@@ -32,7 +32,7 @@ from config import (
 )
 
 st.set_page_config(
-    page_title=f"Comparaison RAG — {APP_TITLE}",
+    page_title=f"RAG Comparison — {APP_TITLE}",
     page_icon=None,
     layout="wide",
 )
@@ -72,13 +72,13 @@ def _generate_answer(query: str, context: str) -> str:
         from shared.gemini_retry import generate_with_retry
         prompt = (
             f"{GENERATION_SYSTEM_PROMPT}\n\n"
-            f"Documents :\n{context}\n\n"
-            f"Question : {query}\n\n"
-            "Réponse :"
+            f"Documents:\n{context}\n\n"
+            f"Question: {query}\n\n"
+            "Answer:"
         )
         return generate_with_retry(GenerativeModel(GENERATION_MODEL), prompt).text
     except Exception as exc:
-        return f"_(Erreur de génération : {exc})_"
+        return f"_(Generation error: {exc})_"
 
 
 # ── Source highlighting in generated answers ─────────────────────────────────
@@ -351,11 +351,11 @@ _init_cmp_state()
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.header("Comparaison RAG")
+    st.header("RAG Comparison")
     st.divider()
 
     st.markdown("**Sessions**")
-    if st.button("Nouvelle session", use_container_width=True, type="primary"):
+    if st.button("New session", use_container_width=True, type="primary"):
         _new_cmp()
         st.rerun()
 
@@ -373,12 +373,12 @@ with st.sidebar:
                 key=f"cmp_load_{meta['id']}",
                 use_container_width=True,
                 type="primary" if is_active else "secondary",
-                help=f"{n} requête{'s' if n != 1 else ''}",
+                help=f"{n} {'queries' if n != 1 else 'query'}",
             ):
                 _load_cmp(meta["id"])
                 st.rerun()
         with del_c:
-            if st.button("X", key=f"cmp_del_{meta['id']}", help="Supprimer"):
+            if st.button("X", key=f"cmp_del_{meta['id']}", help="Delete"):
                 _delete_cmp(meta["id"])
                 st.rerun()
 
@@ -394,7 +394,7 @@ with st.sidebar:
         selected_corpus = st.selectbox("Corpus", corpus_options, key="sel_corpus")
     else:
         selected_corpus = st.text_input(
-            "Corpus (nom)", key="sel_corpus_text", placeholder="base-rag"
+            "Corpus (name)", key="sel_corpus_text", placeholder="base-rag"
         )
 
     st.divider()
@@ -405,26 +405,26 @@ with st.sidebar:
     )
     all_indexes = _load_indexes()
     if all_indexes:
-        st.caption("Index disponibles (sélection automatique) :")
+        st.caption("Available indexes (auto-selected):")
         for idx in all_indexes:
             st.caption(f"• `{idx}`")
     else:
-        st.warning("Aucun index hybrid trouvé.")
+        st.warning("No hybrid indexes found.")
 
     st.divider()
-    st.markdown("**Options Hybrid**")
+    st.markdown("**Hybrid Options**")
     retrieval_mode = st.selectbox(
-        "Mode de retrieval", RETRIEVAL_MODES,
+        "Retrieval mode", RETRIEVAL_MODES,
         index=RETRIEVAL_MODES.index(DEFAULT_RETRIEVAL_MODE),
         key="sel_mode",
     )
     top_k = st.slider(
-        "Chunks par index", min_value=3, max_value=20,
+        "Chunks per index", min_value=3, max_value=20,
         value=DEFAULT_TOP_K, key="sel_topk",
     )
 
     st.divider()
-    if st.button("Actualiser les listes", use_container_width=True):
+    if st.button("Refresh lists", use_container_width=True):
         _load_corpora.clear()
         _load_indexes.clear()
         _refresh_sessions_list()
@@ -436,8 +436,8 @@ with st.sidebar:
 active_cmp = _active_cmp()
 st.title(active_cmp['name'])
 st.caption(
-    "Les deux pipelines s'exécutent en parallèle. "
-    "Chaque colonne s'affiche dès que son résultat est prêt."
+    "Both pipelines run in parallel. "
+    "Each column updates as soon as its result is ready."
 )
 
 # ── Column headers ────────────────────────────────────────────────────────────
@@ -465,8 +465,8 @@ def _show_error(message: str) -> None:
     """Show error or rate-limit warning depending on error type."""
     if "429" in message or "RESOURCE_EXHAUSTED" in message:
         st.warning(
-            "Le service est momentanément surchargé (quota API dépassé). "
-            "Veuillez réessayer dans quelques secondes."
+            "The service is temporarily overloaded (API quota exceeded). "
+            "Please try again in a few seconds."
         )
     else:
         st.error(message)
@@ -498,7 +498,7 @@ def _fn_badge_hybrid(fn_name: str, indexes: list[str]) -> None:
         f"<span style='background:{HYBRID_COLOR}22;color:{HYBRID_COLOR};"
         f"padding:3px 8px;border-radius:4px;font-size:0.8em;font-family:monospace'>"
         # f"{fn_name}({args})"
-        f"{'Multi indexes' if fn_name == 'hybrid_multi_query' else 'Index unique'}({args})"
+        f"{'Multi indexes' if fn_name == 'hybrid_multi_query' else 'Single index'}({args})"
         f"</span>",
         unsafe_allow_html=True,
     )
@@ -510,10 +510,10 @@ def _render_vertex(result: dict, is_drive_url: bool = False) -> None:
         _fn_badge_vertex(corpus_name, is_drive_url=is_drive_url)
         st.write("")
     if result.get("status") == "skipped":
-        st.caption("_Corpus non sélectionné_")
+        st.caption("_No corpus selected_")
         return
     if result.get("status") == "error":
-        _show_error(result.get("message", "Erreur"))
+        _show_error(result.get("message", "Error"))
         return
 
     elapsed = result.get("elapsed_s", "?")
@@ -523,7 +523,7 @@ def _render_vertex(result: dict, is_drive_url: bool = False) -> None:
         similar = result.get("results", [])
         st.caption(f"{elapsed}s · {len(similar)} documents")
         if not similar:
-            st.info("Aucun document similaire trouvé.")
+            st.info("No similar documents found.")
             return
         lines = []
         for r in similar:
@@ -565,10 +565,10 @@ def _render_hybrid_mono(result: dict, indexes_used: list[str]) -> None:
         _fn_badge_hybrid("hybrid_rag_query", indexes_used)
         st.write("")
     if result.get("status") == "skipped":
-        st.caption("_Aucun index sélectionné_")
+        st.caption("_No index selected_")
         return
     if result.get("status") == "error":
-        _show_error(result.get("message", "Erreur"))
+        _show_error(result.get("message", "Error"))
         return
     total_s        = result.get("elapsed_s", "?")
     retrieval_query = result.get("retrieval_query", "")
@@ -584,12 +584,12 @@ def _render_hybrid_mono(result: dict, indexes_used: list[str]) -> None:
     if timing_detail:
         st.caption(f"_{timing_detail}_")
     if retrieval_query:
-        st.caption(f"query retrieval : _{retrieval_query}_")
+        st.caption(f"retrieval query: _{retrieval_query}_")
     generated = result.get("generated_answer", "")
     _render_answer(generated, result.get("sources", []))
     st.divider()
     render_sources(result.get("sources", []), pipeline="hybrid")
-    with st.expander("Chunks récupérés", expanded=False):
+    with st.expander("Retrieved chunks", expanded=False):
         render_chunks(result.get("chunks", []))
 
 
@@ -605,7 +605,7 @@ def _render_hybrid_similar(result: dict, indexes_used: list[str]) -> None:
     )
     st.write("")
     if result.get("status") == "error":
-        _show_error(result.get("message", "Erreur"))
+        _show_error(result.get("message", "Error"))
         return
     elapsed = result.get("elapsed_s", "?")
     similar = result.get("results", [])
@@ -618,7 +618,7 @@ def _render_hybrid_similar(result: dict, indexes_used: list[str]) -> None:
         st.divider()
 
     if not similar:
-        st.info("Aucun document similaire trouvé.")
+        st.info("No similar documents found.")
         return
     lines = []
     for r in similar:
@@ -635,10 +635,10 @@ def _render_hybrid_multi(result: dict, indexes_used: list[str]) -> None:
         _fn_badge_hybrid("hybrid_multi_query", indexes_used)
         st.write("")
     if result.get("status") == "skipped":
-        st.caption("_Aucun index disponible_")
+        st.caption("_No indexes available_")
         return
     if result.get("status") == "error":
-        _show_error(result.get("message", "Erreur"))
+        _show_error(result.get("message", "Error"))
         return
     empty          = result.get("indexes_empty", [])
     total          = result.get("total_results", 0)
@@ -651,18 +651,18 @@ def _render_hybrid_multi(result: dict, indexes_used: list[str]) -> None:
     st.caption(
         f"{total_s}s total · "
         f"{total} chunks · {len(indexes_used)} index"
-        + (f" · vides : {', '.join(empty)}" if empty else "")
+        + (f" · empty: {', '.join(empty)}" if empty else "")
     )
     if timing_detail:
         st.caption(f"_{timing_detail}_")
     if retrieval_query:
-        st.caption(f"query retrieval : _{retrieval_query}_")
+        st.caption(f"retrieval query: _{retrieval_query}_")
     generated = result.get("generated_answer", "")
     all_sources = result.get("sources", [])
     _render_answer(generated, all_sources)
     st.divider()
-    # Détail par index dans un expander
-    with st.expander("Détail par index", expanded=False):
+    # Details by index in an expander
+    with st.expander("Details by index", expanded=False):
         for idx_name, chunks in result.get("results_by_index", {}).items():
             st.markdown(
                 f"<div style='border-left:3px solid {HYBRID_COLOR};"
@@ -697,13 +697,13 @@ for entry in active_cmp.get("history", []):
 
 # ── New query ─────────────────────────────────────────────────────────────────
 
-query_input = st.chat_input("Posez votre question…")
+query_input = st.chat_input("Ask your question...")
 
 if query_input:
     corpus = selected_corpus if isinstance(selected_corpus, str) else ""
 
     if not corpus and not all_indexes:
-        st.warning("Aucun corpus Naive RAG ni index Hybrid disponible.")
+        st.warning("No Naive RAG corpus or Hybrid indexes available.")
         st.stop()
 
     # Auto-name session from first query
@@ -760,7 +760,7 @@ if query_input:
             resolved = all_indexes
     else:
         # Run resolve + rewrite in parallel (both are Gemini Flash calls)
-        with st.spinner("Résolution des index + réécriture de la requête…"):
+        with st.spinner("Resolving indexes + rewriting query..."):
             import concurrent.futures as _cf
             t_pre = _t.perf_counter()
 
@@ -798,7 +798,7 @@ if query_input:
 
     with col_v:
         v_ph = st.empty()
-        v_ph.info(f"Naive RAG en cours… `{corpus}`")
+        v_ph.info(f"Naive RAG running... `{corpus}`")
 
     with col_h:
         if _drive_url_match:
@@ -808,7 +808,7 @@ if query_input:
         else:
             fn_label = "hybrid_rag_query"
         h_ph = st.empty()
-        h_ph.info(f"`{fn_label}` en cours…")
+        h_ph.info(f"`{fn_label}` running...")
 
     # ── Step 3: pipeline functions ────────────────────────────────────────────
 
@@ -849,8 +849,8 @@ if query_input:
                 doc_text = extract_from_url(_drive_url_match.group(0), drive_service)
                 if doc_text:
                     doc_summary = _generate_answer(
-                        "Résume ce document en 3-5 phrases : de quoi parle-t-il, "
-                        "quel est son objectif, qui sont les parties impliquées ?",
+                        "Summarize this document in 3-5 sentences: what is it about, "
+                        "what is its purpose, who are the parties involved?",
                         doc_text[:6000],
                     )
             except Exception:

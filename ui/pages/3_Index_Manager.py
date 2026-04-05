@@ -229,7 +229,7 @@ with tab_tree:
         ]
 
         # Special label: one company is "Customer Care", the rest are "Region N"
-        _CUSTOMER_CARE_KEYWORDS = {"customer care", "customer_care", "novembre", "support"}
+        _CUSTOMER_CARE_KEYWORDS = {"customer care", "customer_care", "novembre", "support", "lacoste"}
 
         sorted_companies = sorted(grouped.items())
         region_num = 0

@@ -168,6 +168,7 @@ else:
 
 from components.chat_message import render_user_message, render_error_message
 from components.source_card  import render_sources, render_chunks
+from components.answer_renderer import render_answer
 
 for msg in st.session_state.sc_messages:
     if msg["role"] == "user":
@@ -175,19 +176,30 @@ for msg in st.session_state.sc_messages:
 
     elif msg["role"] == "assistant":
         with st.chat_message("assistant"):
-            st.markdown(msg["text"])
             sources  = msg.get("sources", [])
             chunks   = msg.get("chunks", [])
             pipeline = msg.get("pipeline", "hybrid")
             elapsed  = msg.get("elapsed_s")
+            timings  = msg.get("timings", {})
+            render_answer(msg["text"], sources)
             if sources:
                 with st.expander(f"Sources ({len(sources)})", expanded=False):
                     render_sources(sources, pipeline=pipeline)
             if chunks:
-                with st.expander(f"Citations ({len(chunks)} chunks)", expanded=False):
+                with st.expander(f"Retrieved chunks ({len(chunks)})", expanded=False):
                     render_chunks(chunks)
+            # Timing
+            timing_parts: list[str] = []
+            if timings:
+                for k in ("resolve_and_rewrite", "rewrite_query", "embedding", "threads", "search", "generation"):
+                    if k in timings:
+                        label = k.replace("_", " ").replace("and", "+")
+                        timing_parts.append(f"{label} {timings[k]}s")
             if elapsed is not None:
-                st.caption(f"{elapsed}s")
+                caption = f"{elapsed}s"
+                if timing_parts:
+                    caption += f" · {' · '.join(timing_parts)}"
+                st.caption(caption)
 
     elif msg["role"] == "error":
         render_error_message(msg["text"])
@@ -302,7 +314,7 @@ if user_input:
                     elapsed = result.get("elapsed_s")
 
                     with st.chat_message("assistant"):
-                        st.markdown(answer)
+                        render_answer(answer, sources)
                         if sources:
                             with st.expander(f"Sources ({len(sources)})", expanded=False):
                                 render_sources(sources, pipeline="vertex")
@@ -380,58 +392,87 @@ if user_input:
                         "elapsed_s": elapsed,
                     })
 
-                # ── Requête texte classique ───────────────────────────────────
+                # ── Text query ────────────────────────────────────────────────
                 else:
                     from services.vertex_service import synthesize_from_context
+                    from shared.query_rewriter import rewrite_query
+                    import time as _t
 
-                    with st.spinner("Detecting relevant indexes..."):
-                        target_indexes = resolve_indexes(user_input, all_indexes)
+                    t_total = _t.perf_counter()
+                    timings: dict[str, float] = {}
 
-                    t0        = time.perf_counter()
+                    # Resolve indexes + rewrite query in parallel
+                    from concurrent.futures import ThreadPoolExecutor as _TPE
+                    t0 = _t.perf_counter()
+                    with _TPE(max_workers=2) as pool:
+                        f_resolve = pool.submit(resolve_indexes, user_input, all_indexes)
+                        f_rewrite = pool.submit(rewrite_query, user_input, context)
+                        target_indexes = f_resolve.result()
+                        rewritten = f_rewrite.result()
+                    timings["resolve+rewrite"] = round(_t.perf_counter() - t0, 2)
+
+                    # Retrieval
+                    t0 = _t.perf_counter()
                     retrieval = hybrid_multi_query(
                         index_names=target_indexes,
-                        query_text=user_input,
+                        query_text=rewritten,
                         context=context,
+                        retrieval_query=rewritten,
                     )
+                    timings["retrieval"] = round(_t.perf_counter() - t0, 2)
 
                     if retrieval.get("status") == "error":
                         raise RuntimeError(retrieval.get("message", "Hybrid error"))
 
+                    # Merge inner timings (embedding, threads)
+                    inner = retrieval.get("timings", {})
+                    timings.update(inner)
+
+                    # Synthesis
+                    t0 = _t.perf_counter()
                     synth = synthesize_from_context(
                         query_text=user_input,
                         rag_context=retrieval.get("answer", ""),
                         conversation_context=context,
                     )
+                    timings["generation"] = round(_t.perf_counter() - t0, 2)
 
                     if synth.get("status") == "error":
                         raise RuntimeError(synth.get("message", "Synthesis error"))
 
                     answer  = synth.get("answer", "")
                     sources = retrieval.get("sources", [])
-                    # single-index → flat chunks list; multi-index → flatten results_by_index
                     chunks  = retrieval.get("chunks") or [
                         c for cs in retrieval.get("results_by_index", {}).values()
                         for c in cs
                     ]
-                    elapsed = round(time.perf_counter() - t0, 2)
+                    elapsed = round(_t.perf_counter() - t_total, 2)
+                    timings["total"] = elapsed
+
                     index_label = (
                         target_indexes[0]
                         if len(target_indexes) == 1
-                        else f"{len(target_indexes)} index"
+                        else f"{len(target_indexes)} indexes"
                     )
 
-                    retrieval_query = retrieval.get("retrieval_query", "")
                     with st.chat_message("assistant"):
-                        st.markdown(answer)
+                        render_answer(answer, sources)
                         if sources:
                             with st.expander(f"Sources ({len(sources)})", expanded=False):
                                 render_sources(sources, pipeline="hybrid")
                         if chunks:
-                            with st.expander(f"Citations ({len(chunks)} chunks)", expanded=False):
+                            with st.expander(f"Retrieved chunks ({len(chunks)})", expanded=False):
                                 render_chunks(chunks)
+                        # Timing breakdown
+                        timing_parts = []
+                        for k in ("resolve+rewrite", "embedding", "threads", "generation"):
+                            if k in timings:
+                                timing_parts.append(f"{k} {timings[k]}s")
                         caption = f"{elapsed}s · {index_label}"
-                        if retrieval_query and retrieval_query != user_input:
-                            caption += f" · query: _{retrieval_query}_"
+                        if timing_parts:
+                            caption += f" · {' · '.join(timing_parts)}"
+                        if rewritten and rewritten != user_input:
+                            caption += f"\nretrieval query: _{rewritten}_"
                         st.caption(caption)
 
                     st.session_state.sc_messages.append({
@@ -441,6 +482,7 @@ if user_input:
                         "chunks":    chunks,
                         "pipeline":  "hybrid",
                         "elapsed_s": elapsed,
+                        "timings":   timings,
                     })
 
         except Exception as exc:

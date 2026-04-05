@@ -159,21 +159,77 @@ def _highlight_sources(text: str, sources: list[dict]) -> str:
 
 
 def _md_to_html(text: str) -> str:
-    """Lightweight markdown to HTML for Gemini output."""
+    """Lightweight markdown to HTML for Gemini output.
+
+    Handles: headers, bold, italic, bullet/numbered lists, tables, hr.
+    """
     import re
     lines = text.split("\n")
     html_lines: list[str] = []
     in_ul = False
     in_ol = False
+    in_table = False
+    table_has_header = False
+
+    _TABLE_STYLE = (
+        "border-collapse:collapse;width:100%;margin:8px 0;font-size:0.92em"
+    )
+    _TH_STYLE = (
+        "border:1px solid #D4E8DC;padding:6px 10px;background:#F5FAF7;"
+        "text-align:left;font-weight:600"
+    )
+    _TD_STYLE = "border:1px solid #D4E8DC;padding:6px 10px"
+
+    def _is_table_row(s: str) -> bool:
+        return s.startswith("|") and s.endswith("|") and s.count("|") >= 3
+
+    def _is_separator_row(s: str) -> bool:
+        return bool(re.match(r'^\|[\s\-:|]+\|$', s))
+
+    def _parse_cells(s: str) -> list[str]:
+        return [c.strip() for c in s.strip("|").split("|")]
 
     for line in lines:
         stripped = line.strip()
+
+        # Close open lists if line is not a list item
         if in_ul and not stripped.startswith(("- ", "* ")):
             html_lines.append("</ul>")
             in_ul = False
         if in_ol and not re.match(r'^\d+[\.\)]\s', stripped):
             html_lines.append("</ol>")
             in_ol = False
+
+        # Table handling
+        if _is_table_row(stripped):
+            if _is_separator_row(stripped):
+                # Separator row (|---|---|) — skip, header already emitted
+                continue
+            cells = _parse_cells(stripped)
+            if not in_table:
+                # First row = header
+                in_table = True
+                table_has_header = True
+                html_lines.append(f"<table style='{_TABLE_STYLE}'>")
+                html_lines.append("<thead><tr>")
+                for c in cells:
+                    html_lines.append(f"<th style='{_TH_STYLE}'>{c}</th>")
+                html_lines.append("</tr></thead><tbody>")
+            else:
+                # Data row
+                html_lines.append("<tr>")
+                for c in cells:
+                    html_lines.append(f"<td style='{_TD_STYLE}'>{c}</td>")
+                html_lines.append("</tr>")
+            continue
+
+        # Close table if we were in one
+        if in_table:
+            html_lines.append("</tbody></table>")
+            in_table = False
+            table_has_header = False
+
+        # Headers
         if stripped.startswith("#### "):
             html_lines.append(f"<h4>{stripped[5:]}</h4>")
         elif stripped.startswith("### "):
@@ -182,25 +238,34 @@ def _md_to_html(text: str) -> str:
             html_lines.append(f"<h2>{stripped[3:]}</h2>")
         elif stripped.startswith("# "):
             html_lines.append(f"<h1>{stripped[2:]}</h1>")
+        # Unordered list
         elif stripped.startswith(("- ", "* ")):
             if not in_ul:
                 html_lines.append("<ul>")
                 in_ul = True
             html_lines.append(f"<li>{stripped[2:]}</li>")
+        # Ordered list
         elif re.match(r'^\d+[\.\)]\s', stripped):
             if not in_ol:
                 html_lines.append("<ol>")
                 in_ol = True
             content = re.sub(r'^\d+[\.\)]\s', '', stripped)
             html_lines.append(f"<li>{content}</li>")
+        # Empty line
         elif not stripped:
             html_lines.append("<br>")
+        # Regular text
         else:
             html_lines.append(f"<p style='margin:4px 0'>{stripped}</p>")
+
+    # Close any open structures
     if in_ul:
         html_lines.append("</ul>")
     if in_ol:
         html_lines.append("</ol>")
+    if in_table:
+        html_lines.append("</tbody></table>")
+
     result = "\n".join(html_lines)
     result = re.sub(r'\*\*\*', '<hr style="border:none;border-top:1px solid #D4E8DC;margin:16px 0">', result)
     result = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', result)

@@ -181,7 +181,7 @@ with tab_list:
 with tab_tree:
     col_title, col_refresh = st.columns([6, 1])
     with col_title:
-        st.subheader("Knowledge Base Structure")
+        st.subheader("Knowledge Base Overview")
     with col_refresh:
         if st.button("Refresh", help="Refresh", use_container_width=True, key="refresh_tree"):
             _refresh()
@@ -189,111 +189,372 @@ with tab_tree:
     grouped = _load_indexes_grouped()
 
     if not grouped:
-        st.info("No indexes found.")
+        st.info("No indexes found. Import your documents in the **Import Data** tab to get started.")
     else:
+        import plotly.graph_objects as go
+
         all_indexes = _load_indexes()
         grand_total_chunks = sum(i.get("total_chunks", 0) for i in all_indexes)
         grand_total_files = sum(i.get("total_files", 0) for i in all_indexes)
 
-        st.markdown("""
-        <style>
-        .tree-root {
-            font-family: 'Courier New', monospace;
-            font-size: 14px;
-            line-height: 1.8;
-            padding: 16px 20px;
-            background: #F5FAF7;
-            border-radius: 10px;
-            border: 1px solid #D4E8DC;
-        }
-        .tree-root .node-root {
-            font-size: 16px;
-            font-weight: 700;
-            color: #006A4E;
-        }
-        .tree-root .node-company {
-            font-weight: 600;
-            color: #006A4E;
-        }
-        .tree-root .node-notion {
-            font-weight: 400;
-        }
-        .tree-root .badge {
-            display: inline-block;
-            padding: 1px 8px;
-            border-radius: 10px;
-            font-size: 11px;
-            font-weight: 600;
-            font-family: -apple-system, sans-serif;
-            margin-left: 6px;
-        }
-        .tree-root .badge-chunks {
-            background: #E6F4ED;
-            color: #006A4E;
-        }
-        .tree-root .badge-files {
-            background: #E6F4ED;
-            color: #00A651;
-        }
-        .tree-root .badge-indexes {
-            background: #FFF8E6;
-            color: #8B7335;
-        }
-        .tree-root .dim {
-            opacity: 0.35;
-            color: #006A4E;
-        }
-        </style>
-        """, unsafe_allow_html=True)
+        # ── Summary KPIs ─────────────────────────────────────────────────
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        kpi1.metric("Regions / Clients", len(grouped))
+        kpi2.metric("Topics", len(all_indexes))
+        kpi3.metric("Documents", grand_total_files)
+        kpi4.metric("Text segments", grand_total_chunks)
 
-        lines: list[str] = []
+        st.divider()
 
-        lines.append(
-            f'<span class="node-root">Knowledge Base</span>'
-            f'  <span class="badge badge-indexes">{len(all_indexes)} indexes</span>'
-            f'  <span class="badge badge-chunks">{grand_total_chunks} chunks</span>'
-            f'  <span class="badge badge-files">{grand_total_files} files</span>'
-        )
+        # ── Build sunburst data ──────────────────────────────────────────
+        sb_ids: list[str] = []
+        sb_labels: list[str] = []
+        sb_parents: list[str] = []
+        sb_values: list[int] = []
+        sb_colors: list[str] = []
+        sb_hover: list[str] = []
+
+        # Distinct palette — each company gets a clearly different color
+        _PALETTE = [
+            "#006A4E",  # Lacoste green
+            "#2563EB",  # Blue
+            "#D97706",  # Amber
+            "#9333EA",  # Purple
+            "#DC2626",  # Red
+            "#0891B2",  # Cyan
+            "#C026D3",  # Fuchsia
+            "#059669",  # Emerald
+            "#EA580C",  # Orange
+            "#4F46E5",  # Indigo
+        ]
+
+        # Special label: one company is "Customer Care", the rest are "Region N"
+        _CUSTOMER_CARE_KEYWORDS = {"customer care", "customer_care", "novembre", "support"}
 
         sorted_companies = sorted(grouped.items())
+        region_num = 0
+
         for c_idx, (company, idxs) in enumerate(sorted_companies):
-            is_last_company = c_idx == len(sorted_companies) - 1
-            company_chunks = sum(i.get("total_chunks", 0) for i in idxs)
             company_files = sum(i.get("total_files", 0) for i in idxs)
+            company_chunks = sum(i.get("total_chunks", 0) for i in idxs)
+            color = _PALETTE[c_idx % len(_PALETTE)]
 
-            branch = "└── " if is_last_company else "├── "
-            prefix = "    " if is_last_company else "│   "
+            # Determine display label
+            is_cc = any(kw in company.lower() for kw in _CUSTOMER_CARE_KEYWORDS)
+            if is_cc:
+                display_label = "Customer Care"
+            else:
+                region_num += 1
+                display_label = f"Region {region_num}"
 
-            lines.append(
-                f'<span class="dim">{branch}</span>'
-                f'<span class="node-company">{company.upper()}</span>'
-                f'  <span class="badge badge-indexes">{len(idxs)} indexes</span>'
-                f'  <span class="badge badge-chunks">{company_chunks} chunks</span>'
-                f'  <span class="badge badge-files">{company_files} files</span>'
-            )
-
-            sorted_idxs = sorted(idxs, key=lambda x: x.get("index_name", ""))
-            for n_idx, idx in enumerate(sorted_idxs):
-                is_last_notion = n_idx == len(sorted_idxs) - 1
-                notion = _notion_label(idx.get("index_name", ""))
+            for idx in sorted(idxs, key=lambda x: x.get("index_name", "")):
+                name = idx.get("index_name", "")
+                notion = _notion_label(name)
                 chunks = idx.get("total_chunks", 0)
                 files = idx.get("total_files", 0)
+                topic_label = notion.upper().replace("_", " ")
 
-                sub_branch = "└── " if is_last_notion else "├── "
+                # Short label: strip leading numbers, keep first word(s)
+                short = topic_label.lstrip("0123456789 _")
+                short = short[:12].strip()
+                if not short:
+                    short = topic_label[:10]
 
-                lines.append(
-                    f'<span class="dim">{prefix}{sub_branch}</span>'
-                    f'<span class="node-notion">{notion.upper()}</span>'
-                    f'  <span class="badge badge-chunks">{chunks} chunks</span>'
-                    f'  <span class="badge badge-files">{files} files</span>'
+                sb_ids.append(name)
+                sb_labels.append(short)
+                sb_parents.append(company.upper())
+                sb_values.append(max(files, 1))
+                sb_colors.append(color + "CC")
+                sb_hover.append(
+                    f"<b>{display_label} — {topic_label}</b><br>"
+                    f"{files} documents · {chunks} segments"
                 )
 
-        tree_html = "<br>".join(lines)
-        st.markdown(f'<div class="tree-root">{tree_html}</div>', unsafe_allow_html=True)
+            # Company node
+            sb_ids.append(company.upper())
+            sb_labels.append(display_label)
+            sb_parents.append("Knowledge Base")
+            sb_values.append(max(company_files, 1))
+            sb_colors.append(color)
+            sb_hover.append(
+                f"<b>{display_label}</b><br>"
+                f"<i>{company.upper()}</i><br>"
+                f"{len(idxs)} topics · {company_files} documents<br>"
+                f"{company_chunks} text segments"
+            )
+
+        # Root node
+        sb_ids.append("Knowledge Base")
+        sb_labels.append("Knowledge Base")
+        sb_parents.append("")
+        sb_values.append(max(grand_total_files, 1))
+        sb_colors.append("#F5FAF7")
+        sb_hover.append(
+            f"<b>Knowledge Base</b><br>"
+            f"{len(grouped)} regions · {len(all_indexes)} topics<br>"
+            f"{grand_total_files} documents · {grand_total_chunks} segments"
+        )
+
+        # ── Sunburst chart ───────────────────────────────────────────────
+        fig_sun = go.Figure(go.Sunburst(
+            ids=sb_ids,
+            labels=sb_labels,
+            parents=sb_parents,
+            values=sb_values,
+            branchvalues="total",
+            hovertext=sb_hover,
+            hoverinfo="text",
+            textinfo="label",
+            insidetextorientation="horizontal",
+            marker=dict(
+                colors=sb_colors,
+                line=dict(width=2, color="#FFFFFF"),
+            ),
+        ))
+        fig_sun.update_layout(
+            margin=dict(t=10, l=10, r=10, b=10),
+            height=550,
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(
+                family="-apple-system, BlinkMacSystemFont, sans-serif",
+                size=11,
+                color="#1A1A1A",
+            ),
+        )
+
+        # ── Treemap chart ────────────────────────────────────────────────
+        fig_tree = go.Figure(go.Treemap(
+            ids=sb_ids,
+            labels=sb_labels,
+            parents=sb_parents,
+            values=sb_values,
+            branchvalues="total",
+            hovertext=sb_hover,
+            hoverinfo="text",
+            textinfo="label",
+            texttemplate="<b>%{label}</b>",
+            marker=dict(
+                colors=sb_colors,
+                line=dict(width=2, color="#FFFFFF"),
+            ),
+            tiling=dict(packing="squarify"),
+        ))
+        fig_tree.update_layout(
+            margin=dict(t=10, l=10, r=10, b=10),
+            height=550,
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(
+                family="-apple-system, BlinkMacSystemFont, sans-serif",
+                size=12,
+                color="#FFFFFF",
+            ),
+        )
+
+        # ── Network graph ────────────────────────────────────────────────
+        import math
+
+        # Build node positions using a radial layout
+        # Center = Knowledge Base, ring 1 = companies, ring 2 = topics
+        net_nodes: list[dict] = []  # {id, label, x, y, size, color, hover}
+        net_edges: list[dict] = []  # {x0, y0, x1, y1}
+
+        # Root at center
+        net_nodes.append(dict(
+            id="root", label="Knowledge\nBase", x=0, y=0,
+            size=40, color="#006A4E",
+            hover=(
+                f"<b>Knowledge Base</b><br>"
+                f"{len(grouped)} regions · {len(all_indexes)} topics<br>"
+                f"{grand_total_files} documents"
+            ),
+        ))
+
+        n_companies = len(sorted_companies)
+        company_angle_step = 2 * math.pi / max(n_companies, 1)
+        r_company = 1.8  # radius for company ring
+
+        for c_idx, (company, idxs) in enumerate(sorted_companies):
+            company_files = sum(i.get("total_files", 0) for i in idxs)
+            color = _PALETTE[c_idx % len(_PALETTE)]
+            angle = c_idx * company_angle_step - math.pi / 2
+
+            cx = r_company * math.cos(angle)
+            cy = r_company * math.sin(angle)
+
+            # Reuse display label from sunburst data
+            is_cc = any(kw in company.lower() for kw in _CUSTOMER_CARE_KEYWORDS)
+            if is_cc:
+                c_label = "Customer\nCare"
+            else:
+                # Find region number from sb data
+                c_label = next(
+                    (sb_labels[i] for i, sid in enumerate(sb_ids) if sid == company.upper()),
+                    company.upper()[:10],
+                )
+                c_label = c_label.replace(" ", "\n")
+
+            net_nodes.append(dict(
+                id=company, label=c_label, x=cx, y=cy,
+                size=max(18, min(35, company_files // 3)),
+                color=color,
+                hover=(
+                    f"<b>{c_label.replace(chr(10), ' ')}</b><br>"
+                    f"<i>{company.upper()}</i><br>"
+                    f"{len(idxs)} topics · {company_files} documents"
+                ),
+            ))
+            net_edges.append(dict(x0=0, y0=0, x1=cx, y1=cy))
+
+            # Topics around this company
+            n_topics = len(idxs)
+            topic_spread = min(company_angle_step * 0.7, math.pi * 0.4)
+            topic_start = angle - topic_spread / 2
+            topic_step = topic_spread / max(n_topics - 1, 1) if n_topics > 1 else 0
+            r_topic = r_company + 1.4
+
+            for t_idx, idx in enumerate(sorted(idxs, key=lambda x: x.get("index_name", ""))):
+                name = idx.get("index_name", "")
+                notion = _notion_label(name)
+                chunks = idx.get("total_chunks", 0)
+                files = idx.get("total_files", 0)
+                topic_full = notion.upper().replace("_", " ")
+                topic_short = topic_full.lstrip("0123456789 ")[:10].strip()
+
+                t_angle = topic_start + t_idx * topic_step if n_topics > 1 else angle
+                tx = r_topic * math.cos(t_angle)
+                ty = r_topic * math.sin(t_angle)
+
+                # Convert hex color to rgba with transparency for topics
+                _r, _g, _b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+                topic_color = f"rgba({_r},{_g},{_b},0.65)"
+
+                net_nodes.append(dict(
+                    id=name, label=topic_short, x=tx, y=ty,
+                    size=max(10, min(22, files)),
+                    color=topic_color,
+                    hover=(
+                        f"<b>{topic_full}</b><br>"
+                        f"{files} documents · {chunks} segments"
+                    ),
+                ))
+                net_edges.append(dict(x0=cx, y0=cy, x1=tx, y1=ty))
+
+        # Build plotly figure
+        edge_x: list[float | None] = []
+        edge_y: list[float | None] = []
+        for e in net_edges:
+            edge_x += [e["x0"], e["x1"], None]
+            edge_y += [e["y0"], e["y1"], None]
+
+        fig_net = go.Figure()
+
+        # Edges
+        fig_net.add_trace(go.Scatter(
+            x=edge_x, y=edge_y,
+            mode="lines",
+            line=dict(width=1.5, color="#C0C0C0"),
+            hoverinfo="none",
+        ))
+
+        # Nodes
+        fig_net.add_trace(go.Scatter(
+            x=[n["x"] for n in net_nodes],
+            y=[n["y"] for n in net_nodes],
+            mode="markers+text",
+            marker=dict(
+                size=[n["size"] for n in net_nodes],
+                color=[n["color"] for n in net_nodes],
+                line=dict(width=2, color="#FFFFFF"),
+            ),
+            text=[n["label"] for n in net_nodes],
+            textposition="bottom center",
+            textfont=dict(size=10, color="#1A1A1A"),
+            hovertext=[n["hover"] for n in net_nodes],
+            hoverinfo="text",
+        ))
+
+        fig_net.update_layout(
+            showlegend=False,
+            margin=dict(t=10, l=10, r=10, b=10),
+            height=600,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, visible=False),
+            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, visible=False, scaleanchor="x"),
+            font=dict(family="-apple-system, BlinkMacSystemFont, sans-serif"),
+        )
+
+        # ── Display charts ───────────────────────────────────────────────
+        chart_tab1, chart_tab2, chart_tab3 = st.tabs(["Network", "Sunburst", "Treemap"])
+        with chart_tab1:
+            st.plotly_chart(fig_net, use_container_width=True, key="network")
+        with chart_tab2:
+            st.plotly_chart(fig_sun, use_container_width=True, key="sunburst")
+        with chart_tab3:
+            st.plotly_chart(fig_tree, use_container_width=True, key="treemap")
+
+        st.divider()
+
+        # ── Detail cards per company ─────────────────────────────────────
+        st.subheader("Document details")
+
+        for company, idxs in sorted(grouped.items()):
+            company_files = sum(i.get("total_files", 0) for i in idxs)
+
+            with st.expander(
+                f"**{company.upper()}** — {len(idxs)} topics · "
+                f"{company_files} documents",
+                expanded=False,
+            ):
+                sorted_idxs = sorted(idxs, key=lambda x: x.get("index_name", ""))
+                for idx in sorted_idxs:
+                    name = idx.get("index_name", "")
+                    notion = _notion_label(name)
+                    chunks = idx.get("total_chunks", 0)
+                    files = idx.get("total_files", 0)
+
+                    st.markdown(
+                        f"<div style='border-left:3px solid #006A4E;padding:8px 12px;"
+                        f"margin:8px 0;background:#F5FAF7;border-radius:0 6px 6px 0'>"
+                        f"<strong style='color:#006A4E;font-size:1.05em'>"
+                        f"{notion.upper().replace('_', ' ')}</strong>"
+                        f"<span style='color:#666;font-size:0.85em;margin-left:12px'>"
+                        f"{files} documents · {chunks} segments</span>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+
+                    try:
+                        from services.hybrid_service import get_index_info
+                        info = get_index_info(name)
+                        file_list = info.get("files", []) if info.get("status") == "success" else []
+                    except Exception:
+                        file_list = []
+
+                    if file_list:
+                        for f in file_list:
+                            fname = f.get("name", "?")
+                            ftype = f.get("type", "")
+                            url = f.get("url", "")
+                            fchunks = f.get("chunks", 0)
+                            type_label = ftype.upper() if ftype else "—"
+                            if url:
+                                st.markdown(
+                                    f"&nbsp;&nbsp;&nbsp;&nbsp;"
+                                    f"[{fname}]({url})"
+                                    f" &nbsp; `{type_label}` · {fchunks} segments",
+                                )
+                            else:
+                                st.caption(
+                                    f"    {fname}  ·  {type_label}  ·  {fchunks} segments"
+                                )
+                    else:
+                        st.caption("    No documents in this topic yet.")
 
         st.caption(
-            "Each client is organized by topic. "
-            "Every topic has its own dedicated search index for maximum accuracy."
+            "Each region/client is organized by topic. "
+            "Documents are automatically split into searchable text segments for AI retrieval. "
+            "Click on chart segments to zoom in."
         )
 
 

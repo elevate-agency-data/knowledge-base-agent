@@ -375,25 +375,23 @@ with tab_tree:
         company_angle_step = 2 * math.pi / max(n_companies, 1)
         r_company = 1.8  # radius for company ring
 
+        net_region_num = 0
         for c_idx, (company, idxs) in enumerate(sorted_companies):
             company_files = sum(i.get("total_files", 0) for i in idxs)
-            color = _PALETTE[c_idx % len(_PALETTE)]
             angle = c_idx * company_angle_step - math.pi / 2
 
             cx = r_company * math.cos(angle)
             cy = r_company * math.sin(angle)
 
-            # Reuse display label from sunburst data
             is_cc = any(kw in company.lower() for kw in _CUSTOMER_CARE_KEYWORDS)
             if is_cc:
+                color = "#006A4E"
                 c_label = "Customer\nCare"
             else:
-                # Find region number from sb data
-                c_label = next(
-                    (sb_labels[i] for i, sid in enumerate(sb_ids) if sid == company.upper()),
-                    company.upper()[:10],
-                )
-                c_label = c_label.replace(" ", "\n")
+                net_region_num += 1
+                color = _PALETTE[net_region_num % len(_PALETTE)]
+                c_label = f"Region\n{net_region_num}"
+
 
             net_nodes.append(dict(
                 id=company, label=c_label, x=cx, y=cy,

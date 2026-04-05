@@ -28,20 +28,25 @@ into a semantic query optimized for vector search in the internal documentation.
 
 Rules:
 - KEEP product names, sizes, references, model names, brand terms
-- KEEP customer-facing concepts: return, refund, exchange, delivery, warranty, sizing...
+- KEEP customer-facing concepts: return, refund, exchange, delivery, warranty, sizing, order status
+- ALWAYS KEEP numerical information (dates, durations, quantities) — e.g. "3 days", "48h"
+- ALWAYS include time-related concepts if present: delay, duration, processing time, preparation time
+- ALWAYS include policy-related concepts when relevant: SLA, standard time, escalation, delay handling
 - Remove conversational fluff ("the customer wants to know", "can you tell me", "please help")
+- If the query mentions a delay or abnormal situation, include terms like: delay, SLA, escalation, issue
 - If the query mentions a specific product or policy, keep it front and center
 - If conversational context is provided, include key entities from it
-- Formulate a short retrieval-oriented description (max 20 words)
+- Formulate a short retrieval-oriented query (max 20 words)
 - Respond ONLY with the rewritten query, no explanation
-- For vague questions, return broad terms covering likely topics:
-  "product policy return exchange delivery warranty sizing"
+
+For vague questions, return broad terms covering likely topics:
+"product policy return exchange delivery warranty sizing"
 
 Examples without context:
   "customer wants to return a polo bought 3 weeks ago"
-    → "return policy polo delay conditions refund"
+    → "return policy polo 3 weeks delay conditions refund"
   "what size should I recommend for someone who wears M in slim fit?"
-    → "slim fit sizing guide medium size conversion"
+    → "slim fit sizing guide medium size conversion size up"
   "is the ConnectWatch waterproof?"
     → "ConnectWatch water resistance rating specifications"
   "how long is the warranty on leather goods?"
@@ -50,6 +55,14 @@ Examples without context:
     → "shipping policy free delivery threshold conditions"
   "what is your exchange policy for online orders?"
     → "online order exchange policy conditions return"
+  "order 3 days still in preparation"
+    → "order preparation time SLA 3 days delay escalation warehouse"
+  "I placed my order 3 days ago still in preparation"
+    → "order preparation delay 3 days SLA 24-48 hours escalation warehouse"
+  "customer received wrong item"
+    → "wrong item received error shipping claim exchange procedure"
+  "package lost in transit"
+    → "lost package shipping claim carrier delay tracking"
 
 Examples with context:
   context: "Q: what is the return policy?"
@@ -59,6 +72,10 @@ Examples with context:
   context: "Q: ConnectWatch features"
   question: "and the battery life?"
   → "ConnectWatch battery life autonomy specifications"
+
+  context: "Q: order still in preparation after 3 days"
+  question: "what should I tell the customer?"
+  → "order delay escalation procedure advisor response SLA exceeded"
 """
 
 

@@ -237,15 +237,17 @@ with tab_tree:
         for c_idx, (company, idxs) in enumerate(sorted_companies):
             company_files = sum(i.get("total_files", 0) for i in idxs)
             company_chunks = sum(i.get("total_chunks", 0) for i in idxs)
-            color = _PALETTE[c_idx % len(_PALETTE)]
 
-            # Determine display label
+            # Determine display label and color
             is_cc = any(kw in company.lower() for kw in _CUSTOMER_CARE_KEYWORDS)
             if is_cc:
                 display_label = "Customer Care"
+                color = "#006A4E"  # Lacoste green — always
             else:
                 region_num += 1
                 display_label = f"Region {region_num}"
+                # Skip green (#006A4E) in palette for non-CC companies
+                color = _PALETTE[region_num % len(_PALETTE)]
 
             for idx in sorted(idxs, key=lambda x: x.get("index_name", "")):
                 name = idx.get("index_name", "")

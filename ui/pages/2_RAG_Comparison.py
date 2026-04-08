@@ -1,7 +1,7 @@
 """
 Page 2 — RAG Comparison
 
-Vertex AI RAG (gauche) vs Hybrid RAG (droite).
+Naive RAG (gauche) vs Hybrid RAG (droite).
 
 Exécution : les deux pipelines tournent en parallèle (ThreadPoolExecutor).
 Affichage : chaque colonne se met à jour dès que son pipeline est terminé
@@ -32,7 +32,7 @@ from config import (
 )
 
 st.set_page_config(
-    page_title=f"Comparaison RAG — {APP_TITLE}",
+    page_title=f"RAG Comparison — {APP_TITLE}",
     page_icon=None,
     layout="wide",
 )
@@ -72,224 +72,16 @@ def _generate_answer(query: str, context: str) -> str:
         from shared.gemini_retry import generate_with_retry
         prompt = (
             f"{GENERATION_SYSTEM_PROMPT}\n\n"
-            f"Documents :\n{context}\n\n"
-            f"Question : {query}\n\n"
-            "Réponse :"
+            f"Documents:\n{context}\n\n"
+            f"Question: {query}\n\n"
+            "Answer:"
         )
         return generate_with_retry(GenerativeModel(GENERATION_MODEL), prompt).text
     except Exception as exc:
-        return f"_(Erreur de génération : {exc})_"
+        return f"_(Generation error: {exc})_"
 
 
-# ── Source highlighting in generated answers ─────────────────────────────────
-
-def _highlight_sources(text: str, sources: list[dict]) -> str:
-    """
-    Post-process a generated answer to turn source citations in parentheses
-    into highlighted green badges. Handles Gemini's actual output:
-    - (INDEX__NOTION - FileName, detail)
-    - (INDEX__NOTION - FileName ; INDEX__NOTION - FileName2)
-    - (FileName.pdf)
-    """
-    import re
-
-    if not text:
-        return text
-
-    # Build lookup: file name → source_url
-    source_map: dict[str, str] = {}
-    for s in (sources or []):
-        fname = s.get("file_name", "")
-        url = s.get("source_url", "") or s.get("uri", "")
-        if fname and url:
-            source_map[fname.lower()] = url
-            stem = fname.rsplit(".", 1)[0] if "." in fname else fname
-            source_map[stem.lower()] = url
-
-    _BADGE_LINK = (
-        '<a href="{url}" target="_blank" '
-        'style="background:#E6F4ED;color:#006A4E;padding:2px 8px;'
-        'border-radius:4px;font-size:0.82em;text-decoration:none;'
-        'border:1px solid #006A4E30;white-space:normal;'
-        'margin:0 2px">{label}</a>'
-    )
-    _BADGE_SPAN = (
-        '<span style="background:#E6F4ED;color:#006A4E;padding:2px 8px;'
-        'border-radius:4px;font-size:0.82em;'
-        'border:1px solid #006A4E30;white-space:normal;'
-        'margin:0 2px">{label}</span>'
-    )
-
-    def _find_url(citation: str) -> str:
-        parts = citation.split(" - ", 1)
-        file_part = parts[-1].strip() if len(parts) > 1 else citation.strip()
-        file_core = file_part.split(",")[0].strip()
-        for candidate in [file_core, file_part]:
-            key = candidate.lower()
-            if key in source_map:
-                return source_map[key]
-            stem = key.rsplit(".", 1)[0] if "." in key else key
-            if stem in source_map:
-                return source_map[stem]
-        for known, u in source_map.items():
-            if file_core.lower() in known or known in file_core.lower():
-                return u
-        return ""
-
-    def _make_badge(citation: str) -> str:
-        parts = citation.split(" - ", 1)
-        label = parts[-1].strip() if len(parts) > 1 else citation.strip()
-        url = _find_url(citation)
-        if url:
-            return _BADGE_LINK.format(url=url, label=label)
-        return _BADGE_SPAN.format(label=label)
-
-    def _replace_parens(match):
-        inner = match.group(1).strip()
-        citations = [c.strip() for c in inner.split(";") if c.strip()]
-        badges = [_make_badge(c) for c in citations]
-        return " " + " ".join(badges)
-
-    # Match parentheses containing __ (index references)
-    result = re.sub(r'\(([^()]*__[^()]*)\)', _replace_parens, text)
-    # Match parentheses containing file extensions
-    result = re.sub(r'\(([^()]*\.(?:pdf|docx|xlsx|pptx|doc|txt)[^()]*)\)', _replace_parens, result)
-
-    return result
-
-
-def _md_to_html(text: str) -> str:
-    """Lightweight markdown to HTML for Gemini output.
-
-    Handles: headers, bold, italic, bullet/numbered lists, tables, hr.
-    """
-    import re
-    lines = text.split("\n")
-    html_lines: list[str] = []
-    in_ul = False
-    in_ol = False
-    in_table = False
-    table_has_header = False
-
-    _TABLE_STYLE = (
-        "border-collapse:collapse;width:100%;margin:8px 0;font-size:0.92em"
-    )
-    _TH_STYLE = (
-        "border:1px solid #D4E8DC;padding:6px 10px;background:#F5FAF7;"
-        "text-align:left;font-weight:600"
-    )
-    _TD_STYLE = "border:1px solid #D4E8DC;padding:6px 10px"
-
-    def _is_table_row(s: str) -> bool:
-        return s.startswith("|") and s.endswith("|") and s.count("|") >= 3
-
-    def _is_separator_row(s: str) -> bool:
-        return bool(re.match(r'^\|[\s\-:|]+\|$', s))
-
-    def _parse_cells(s: str) -> list[str]:
-        return [c.strip() for c in s.strip("|").split("|")]
-
-    for line in lines:
-        stripped = line.strip()
-
-        # Close open lists if line is not a list item
-        if in_ul and not stripped.startswith(("- ", "* ")):
-            html_lines.append("</ul>")
-            in_ul = False
-        if in_ol and not re.match(r'^\d+[\.\)]\s', stripped):
-            html_lines.append("</ol>")
-            in_ol = False
-
-        # Table handling
-        if _is_table_row(stripped):
-            if _is_separator_row(stripped):
-                # Separator row (|---|---|) — skip, header already emitted
-                continue
-            cells = _parse_cells(stripped)
-            if not in_table:
-                # First row = header
-                in_table = True
-                table_has_header = True
-                html_lines.append(f"<table style='{_TABLE_STYLE}'>")
-                html_lines.append("<thead><tr>")
-                for c in cells:
-                    html_lines.append(f"<th style='{_TH_STYLE}'>{c}</th>")
-                html_lines.append("</tr></thead><tbody>")
-            else:
-                # Data row
-                html_lines.append("<tr>")
-                for c in cells:
-                    html_lines.append(f"<td style='{_TD_STYLE}'>{c}</td>")
-                html_lines.append("</tr>")
-            continue
-
-        # Close table if we were in one
-        if in_table:
-            html_lines.append("</tbody></table>")
-            in_table = False
-            table_has_header = False
-
-        # Headers
-        if stripped.startswith("#### "):
-            html_lines.append(f"<h4>{stripped[5:]}</h4>")
-        elif stripped.startswith("### "):
-            html_lines.append(f"<h3>{stripped[4:]}</h3>")
-        elif stripped.startswith("## "):
-            html_lines.append(f"<h2>{stripped[3:]}</h2>")
-        elif stripped.startswith("# "):
-            html_lines.append(f"<h1>{stripped[2:]}</h1>")
-        # Unordered list
-        elif stripped.startswith(("- ", "* ")):
-            if not in_ul:
-                html_lines.append("<ul>")
-                in_ul = True
-            html_lines.append(f"<li>{stripped[2:]}</li>")
-        # Ordered list
-        elif re.match(r'^\d+[\.\)]\s', stripped):
-            if not in_ol:
-                html_lines.append("<ol>")
-                in_ol = True
-            content = re.sub(r'^\d+[\.\)]\s', '', stripped)
-            html_lines.append(f"<li>{content}</li>")
-        # Empty line
-        elif not stripped:
-            html_lines.append("<br>")
-        # Regular text
-        else:
-            html_lines.append(f"<p style='margin:4px 0'>{stripped}</p>")
-
-    # Close any open structures
-    if in_ul:
-        html_lines.append("</ul>")
-    if in_ol:
-        html_lines.append("</ol>")
-    if in_table:
-        html_lines.append("</tbody></table>")
-
-    result = "\n".join(html_lines)
-    result = re.sub(r'\*\*\*', '<hr style="border:none;border-top:1px solid #D4E8DC;margin:16px 0">', result)
-    result = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', result)
-    result = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<em>\1</em>', result)
-    return result
-
-
-def _render_answer(text: str, sources: list[dict]) -> None:
-    """Render a generated answer with highlighted source badges.
-    Uses st.html() so <a> links are preserved (st.markdown strips them).
-    """
-    if not text:
-        st.markdown("_Aucune réponse générée._")
-        return
-    html_body = _md_to_html(text)
-    highlighted = _highlight_sources(html_body, sources)
-    st.html(
-        f'<div style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;'
-        f'font-size:15px;line-height:1.7;color:#1A1A1A;'
-        f'overflow-x:hidden;overflow-wrap:break-word;word-break:break-word;'
-        f'max-width:100%;box-sizing:border-box">'
-        f'{highlighted}'
-        f'</div>'
-    )
+from components.answer_renderer import render_answer as _render_answer
 
 
 # ── Index resolver ────────────────────────────────────────────────────────────
@@ -349,11 +141,11 @@ _init_cmp_state()
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.header("Comparaison RAG")
+    st.header("RAG Comparison")
     st.divider()
 
     st.markdown("**Sessions**")
-    if st.button("Nouvelle session", use_container_width=True, type="primary"):
+    if st.button("New session", use_container_width=True, type="primary"):
         _new_cmp()
         st.rerun()
 
@@ -371,12 +163,12 @@ with st.sidebar:
                 key=f"cmp_load_{meta['id']}",
                 use_container_width=True,
                 type="primary" if is_active else "secondary",
-                help=f"{n} requête{'s' if n != 1 else ''}",
+                help=f"{n} {'queries' if n != 1 else 'query'}",
             ):
                 _load_cmp(meta["id"])
                 st.rerun()
         with del_c:
-            if st.button("X", key=f"cmp_del_{meta['id']}", help="Supprimer"):
+            if st.button("X", key=f"cmp_del_{meta['id']}", help="Delete"):
                 _delete_cmp(meta["id"])
                 st.rerun()
 
@@ -392,7 +184,7 @@ with st.sidebar:
         selected_corpus = st.selectbox("Corpus", corpus_options, key="sel_corpus")
     else:
         selected_corpus = st.text_input(
-            "Corpus (nom)", key="sel_corpus_text", placeholder="base-rag"
+            "Corpus (name)", key="sel_corpus_text", placeholder="base-rag"
         )
 
     st.divider()
@@ -403,26 +195,26 @@ with st.sidebar:
     )
     all_indexes = _load_indexes()
     if all_indexes:
-        st.caption("Index disponibles (sélection automatique) :")
+        st.caption("Available indexes (auto-selected):")
         for idx in all_indexes:
             st.caption(f"• `{idx}`")
     else:
-        st.warning("Aucun index hybrid trouvé.")
+        st.warning("No hybrid indexes found.")
 
     st.divider()
-    st.markdown("**Options Hybrid**")
+    st.markdown("**Hybrid Options**")
     retrieval_mode = st.selectbox(
-        "Mode de retrieval", RETRIEVAL_MODES,
+        "Retrieval mode", RETRIEVAL_MODES,
         index=RETRIEVAL_MODES.index(DEFAULT_RETRIEVAL_MODE),
         key="sel_mode",
     )
     top_k = st.slider(
-        "Chunks par index", min_value=3, max_value=20,
+        "Chunks per index", min_value=3, max_value=20,
         value=DEFAULT_TOP_K, key="sel_topk",
     )
 
     st.divider()
-    if st.button("Actualiser les listes", use_container_width=True):
+    if st.button("Refresh lists", use_container_width=True):
         _load_corpora.clear()
         _load_indexes.clear()
         _refresh_sessions_list()
@@ -434,8 +226,8 @@ with st.sidebar:
 active_cmp = _active_cmp()
 st.title(active_cmp['name'])
 st.caption(
-    "Les deux pipelines s'exécutent en parallèle. "
-    "Chaque colonne s'affiche dès que son résultat est prêt."
+    "Both pipelines run in parallel. "
+    "Each column updates as soon as its result is ready."
 )
 
 # ── Column headers ────────────────────────────────────────────────────────────
@@ -463,8 +255,8 @@ def _show_error(message: str) -> None:
     """Show error or rate-limit warning depending on error type."""
     if "429" in message or "RESOURCE_EXHAUSTED" in message:
         st.warning(
-            "Le service est momentanément surchargé (quota API dépassé). "
-            "Veuillez réessayer dans quelques secondes."
+            "The service is temporarily overloaded (API quota exceeded). "
+            "Please try again in a few seconds."
         )
     else:
         st.error(message)
@@ -496,7 +288,7 @@ def _fn_badge_hybrid(fn_name: str, indexes: list[str]) -> None:
         f"<span style='background:{HYBRID_COLOR}22;color:{HYBRID_COLOR};"
         f"padding:3px 8px;border-radius:4px;font-size:0.8em;font-family:monospace'>"
         # f"{fn_name}({args})"
-        f"{'Multi indexes' if fn_name == 'hybrid_multi_query' else 'Index unique'}({args})"
+        f"{'Multi indexes' if fn_name == 'hybrid_multi_query' else 'Single index'}({args})"
         f"</span>",
         unsafe_allow_html=True,
     )
@@ -508,10 +300,10 @@ def _render_vertex(result: dict, is_drive_url: bool = False) -> None:
         _fn_badge_vertex(corpus_name, is_drive_url=is_drive_url)
         st.write("")
     if result.get("status") == "skipped":
-        st.caption("_Corpus non sélectionné_")
+        st.caption("_No corpus selected_")
         return
     if result.get("status") == "error":
-        _show_error(result.get("message", "Erreur"))
+        _show_error(result.get("message", "Error"))
         return
 
     elapsed = result.get("elapsed_s", "?")
@@ -521,7 +313,7 @@ def _render_vertex(result: dict, is_drive_url: bool = False) -> None:
         similar = result.get("results", [])
         st.caption(f"{elapsed}s · {len(similar)} documents")
         if not similar:
-            st.info("Aucun document similaire trouvé.")
+            st.info("No similar documents found.")
             return
         lines = []
         for r in similar:
@@ -563,10 +355,10 @@ def _render_hybrid_mono(result: dict, indexes_used: list[str]) -> None:
         _fn_badge_hybrid("hybrid_rag_query", indexes_used)
         st.write("")
     if result.get("status") == "skipped":
-        st.caption("_Aucun index sélectionné_")
+        st.caption("_No index selected_")
         return
     if result.get("status") == "error":
-        _show_error(result.get("message", "Erreur"))
+        _show_error(result.get("message", "Error"))
         return
     total_s        = result.get("elapsed_s", "?")
     retrieval_query = result.get("retrieval_query", "")
@@ -582,12 +374,12 @@ def _render_hybrid_mono(result: dict, indexes_used: list[str]) -> None:
     if timing_detail:
         st.caption(f"_{timing_detail}_")
     if retrieval_query:
-        st.caption(f"query retrieval : _{retrieval_query}_")
+        st.caption(f"retrieval query: _{retrieval_query}_")
     generated = result.get("generated_answer", "")
     _render_answer(generated, result.get("sources", []))
     st.divider()
     render_sources(result.get("sources", []), pipeline="hybrid")
-    with st.expander("Chunks récupérés", expanded=False):
+    with st.expander("Retrieved chunks", expanded=False):
         render_chunks(result.get("chunks", []))
 
 
@@ -603,7 +395,7 @@ def _render_hybrid_similar(result: dict, indexes_used: list[str]) -> None:
     )
     st.write("")
     if result.get("status") == "error":
-        _show_error(result.get("message", "Erreur"))
+        _show_error(result.get("message", "Error"))
         return
     elapsed = result.get("elapsed_s", "?")
     similar = result.get("results", [])
@@ -616,7 +408,7 @@ def _render_hybrid_similar(result: dict, indexes_used: list[str]) -> None:
         st.divider()
 
     if not similar:
-        st.info("Aucun document similaire trouvé.")
+        st.info("No similar documents found.")
         return
     lines = []
     for r in similar:
@@ -633,10 +425,10 @@ def _render_hybrid_multi(result: dict, indexes_used: list[str]) -> None:
         _fn_badge_hybrid("hybrid_multi_query", indexes_used)
         st.write("")
     if result.get("status") == "skipped":
-        st.caption("_Aucun index disponible_")
+        st.caption("_No indexes available_")
         return
     if result.get("status") == "error":
-        _show_error(result.get("message", "Erreur"))
+        _show_error(result.get("message", "Error"))
         return
     empty          = result.get("indexes_empty", [])
     total          = result.get("total_results", 0)
@@ -649,17 +441,18 @@ def _render_hybrid_multi(result: dict, indexes_used: list[str]) -> None:
     st.caption(
         f"{total_s}s total · "
         f"{total} chunks · {len(indexes_used)} index"
-        + (f" · vides : {', '.join(empty)}" if empty else "")
+        + (f" · empty: {', '.join(empty)}" if empty else "")
     )
     if timing_detail:
         st.caption(f"_{timing_detail}_")
     if retrieval_query:
-        st.caption(f"query retrieval : _{retrieval_query}_")
+        st.caption(f"retrieval query: _{retrieval_query}_")
     generated = result.get("generated_answer", "")
-    _render_answer(generated, result.get("sources", []))
+    all_sources = result.get("sources", [])
+    _render_answer(generated, all_sources)
     st.divider()
-    # Détail par index dans un expander
-    with st.expander("Détail par index", expanded=False):
+    # Details by index in an expander
+    with st.expander("Details by index", expanded=False):
         for idx_name, chunks in result.get("results_by_index", {}).items():
             st.markdown(
                 f"<div style='border-left:3px solid {HYBRID_COLOR};"
@@ -694,13 +487,13 @@ for entry in active_cmp.get("history", []):
 
 # ── New query ─────────────────────────────────────────────────────────────────
 
-query_input = st.chat_input("Posez votre question…")
+query_input = st.chat_input("Ask your question...")
 
 if query_input:
     corpus = selected_corpus if isinstance(selected_corpus, str) else ""
 
     if not corpus and not all_indexes:
-        st.warning("Aucun corpus Vertex ni index Hybrid disponible.")
+        st.warning("No Naive RAG corpus or Hybrid indexes available.")
         st.stop()
 
     # Auto-name session from first query
@@ -757,7 +550,7 @@ if query_input:
             resolved = all_indexes
     else:
         # Run resolve + rewrite in parallel (both are Gemini Flash calls)
-        with st.spinner("Résolution des index + réécriture de la requête…"):
+        with st.spinner("Resolving indexes + rewriting query..."):
             import concurrent.futures as _cf
             t_pre = _t.perf_counter()
 
@@ -795,7 +588,7 @@ if query_input:
 
     with col_v:
         v_ph = st.empty()
-        v_ph.info(f"Vertex en cours… `{corpus}`")
+        v_ph.info(f"Naive RAG running... `{corpus}`")
 
     with col_h:
         if _drive_url_match:
@@ -805,7 +598,7 @@ if query_input:
         else:
             fn_label = "hybrid_rag_query"
         h_ph = st.empty()
-        h_ph.info(f"`{fn_label}` en cours…")
+        h_ph.info(f"`{fn_label}` running...")
 
     # ── Step 3: pipeline functions ────────────────────────────────────────────
 
@@ -846,8 +639,8 @@ if query_input:
                 doc_text = extract_from_url(_drive_url_match.group(0), drive_service)
                 if doc_text:
                     doc_summary = _generate_answer(
-                        "Résume ce document en 3-5 phrases : de quoi parle-t-il, "
-                        "quel est son objectif, qui sont les parties impliquées ?",
+                        "Summarize this document in 3-5 sentences: what is it about, "
+                        "what is its purpose, who are the parties involved?",
                         doc_text[:6000],
                     )
             except Exception:

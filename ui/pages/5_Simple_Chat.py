@@ -3,7 +3,7 @@ Page 5 — Simple Chat
 
 Interface simplifiée pour utilisateurs non-techniques.
 Un toggle active ou désactive le RAG. Quand le RAG est actif, le pipeline
-(Vertex AI ou Hybrid) est sélectionné en sidebar.
+(Naive RAG ou Hybrid) est sélectionné en sidebar.
 
 Hybrid RAG : les index pertinents sont détectés automatiquement via Gemini Flash
              (fallback sur tous les index si aucun n'est identifié).
@@ -21,7 +21,7 @@ st.set_page_config(
 
 # ── Constantes ────────────────────────────────────────────────────────────────
 
-_PIPELINE_VERTEX = "Vertex AI"
+_PIPELINE_VERTEX = "Naive RAG"
 _PIPELINE_HYBRID = "Hybrid RAG"
 _PIPELINES       = [_PIPELINE_VERTEX, _PIPELINE_HYBRID]
 
@@ -62,7 +62,7 @@ with st.sidebar:
 
     # ── Toggle RAG ────────────────────────────────────────────────────────────
     rag_on = st.toggle(
-        "RAG activé",
+        "RAG enabled",
         value=st.session_state.sc_rag_on,
     )
 
@@ -92,7 +92,7 @@ with st.sidebar:
         st.divider()
 
         if pipeline == _PIPELINE_VERTEX:
-            st.markdown("**Corpus Vertex AI**")
+            st.markdown("**Corpus Naive RAG**")
             try:
                 from services.vertex_service import list_corpora
                 corpus_names = [c["display_name"] for c in list_corpora()]
@@ -109,7 +109,7 @@ with st.sidebar:
                     _clear()
                     st.rerun()
             else:
-                st.warning("Aucun corpus disponible.")
+                st.warning("No corpus available.")
                 st.session_state.sc_corpus = None
 
         else:  # Hybrid RAG
@@ -120,31 +120,31 @@ with st.sidebar:
                 _idx_names = []
 
             if _idx_names:
-                st.markdown("**Index disponibles**")
+                st.markdown("**Available indexes**")
                 for n in _idx_names:
                     st.caption(f"· {n}")
                 st.caption(
-                    "_Index détectés automatiquement dans votre question. "
-                    "Tous interrogés par défaut._"
+                    "_Indexes detected automatically from your question. "
+                    "All queried by default._"
                 )
             else:
-                st.warning("Aucun index disponible.")
+                st.warning("No indexes available.")
 
     st.divider()
 
-    if st.button("Nouvelle conversation", use_container_width=True, type="primary"):
+    if st.button("New conversation", use_container_width=True, type="primary"):
         _clear()
         st.rerun()
 
     # ── Status badge ──────────────────────────────────────────────────────────
     st.divider()
     if not rag_on:
-        st.info("Chatbot Gemini\nSans enrichissement RAG")
+        st.info("Chatbot Gemini\nWithout RAG enrichment")
     elif st.session_state.sc_pipeline == _PIPELINE_VERTEX:
         label = st.session_state.sc_corpus or "—"
-        st.success(f"Vertex AI\nCorpus : **{label}**")
+        st.success(f"Naive RAG\nCorpus: **{label}**")
     else:
-        st.success("Hybrid RAG\nIndex détectés automatiquement")
+        st.success("Hybrid RAG\nIndexes auto-detected")
 
 
 # ── Page header ───────────────────────────────────────────────────────────────
@@ -152,22 +152,23 @@ with st.sidebar:
 st.title("Chat")
 
 if not rag_on:
-    st.caption("Réponse du modèle sans récupération de documents.")
+    st.caption("Model response without document retrieval.")
 elif st.session_state.sc_pipeline == _PIPELINE_VERTEX:
     st.caption(
-        f"Documents récupérés depuis le corpus Vertex AI "
+        f"Documents retrieved from Naive RAG corpus "
         f"**{st.session_state.sc_corpus or '—'}**."
     )
 else:
     st.caption(
-        "Documents récupérés depuis les index Hybrid — "
-        "index sélectionnés automatiquement selon votre question."
+        "Documents retrieved from Hybrid indexes — "
+        "indexes automatically selected based on your question."
     )
 
 # ── Chat history ──────────────────────────────────────────────────────────────
 
 from components.chat_message import render_user_message, render_error_message
 from components.source_card  import render_sources, render_chunks
+from components.answer_renderer import render_answer
 
 for msg in st.session_state.sc_messages:
     if msg["role"] == "user":
@@ -175,19 +176,30 @@ for msg in st.session_state.sc_messages:
 
     elif msg["role"] == "assistant":
         with st.chat_message("assistant"):
-            st.markdown(msg["text"])
             sources  = msg.get("sources", [])
             chunks   = msg.get("chunks", [])
             pipeline = msg.get("pipeline", "hybrid")
             elapsed  = msg.get("elapsed_s")
+            timings  = msg.get("timings", {})
+            render_answer(msg["text"], sources)
             if sources:
                 with st.expander(f"Sources ({len(sources)})", expanded=False):
                     render_sources(sources, pipeline=pipeline)
             if chunks:
-                with st.expander(f"Citations ({len(chunks)} chunks)", expanded=False):
+                with st.expander(f"Retrieved chunks ({len(chunks)})", expanded=False):
                     render_chunks(chunks)
+            # Timing
+            timing_parts: list[str] = []
+            if timings:
+                for k in ("resolve_and_rewrite", "rewrite_query", "embedding", "threads", "search", "generation"):
+                    if k in timings:
+                        label = k.replace("_", " ").replace("and", "+")
+                        timing_parts.append(f"{label} {timings[k]}s")
             if elapsed is not None:
-                st.caption(f"{elapsed}s")
+                caption = f"{elapsed}s"
+                if timing_parts:
+                    caption += f" · {' · '.join(timing_parts)}"
+                st.caption(caption)
 
     elif msg["role"] == "error":
         render_error_message(msg["text"])
@@ -197,13 +209,13 @@ for msg in st.session_state.sc_messages:
 
 _ready = True
 if rag_on and st.session_state.sc_pipeline == _PIPELINE_VERTEX and not st.session_state.sc_corpus:
-    st.warning("Sélectionnez un corpus Vertex AI dans la barre latérale.")
+    st.warning("Select a Naive RAG corpus in the sidebar.")
     _ready = False
 
 _placeholder = (
-    "Posez votre question…"
+    "Ask your question..."
     if not rag_on
-    else "Posez votre question sur les documents…"
+    else "Ask a question about your documents..."
 )
 
 # ── Input & routing ───────────────────────────────────────────────────────────
@@ -216,7 +228,7 @@ if user_input:
 
     context = _build_context()
 
-    with st.spinner("Recherche en cours…"):
+    with st.spinner("Searching..."):
         try:
 
             # ── Sans RAG — Gemini direct ──────────────────────────────────────
@@ -226,7 +238,7 @@ if user_input:
                 pipeline = "hybrid"
 
                 if result.get("status") == "error":
-                    raise RuntimeError(result.get("message", "Erreur"))
+                    raise RuntimeError(result.get("message", "Error"))
 
                 answer  = result.get("answer", "")
                 elapsed = result.get("elapsed_s")
@@ -243,7 +255,7 @@ if user_input:
                     "elapsed_s": elapsed,
                 })
 
-            # ── Vertex AI RAG ─────────────────────────────────────────────────
+            # ── Naive RAG RAG ─────────────────────────────────────────────────
             elif st.session_state.sc_pipeline == _PIPELINE_VERTEX:
                 import re as _re
                 _drive_url = _re.search(
@@ -259,11 +271,11 @@ if user_input:
                     )
 
                     if result.get("status") == "error":
-                        raise RuntimeError(result.get("message", "Erreur Vertex find_similar"))
+                        raise RuntimeError(result.get("message", "Naive RAG find_similar error"))
 
                     similar = result.get("results", [])
                     elapsed = result.get("elapsed_s")
-                    answer  = f"Voici les **{len(similar)} documents** les plus similaires (Vertex AI RAG) :"
+                    answer  = f"Here are the **{len(similar)} most similar documents** (Naive RAG):"
 
                     with st.chat_message("assistant"):
                         st.markdown(answer)
@@ -275,7 +287,7 @@ if user_input:
                                 lines.append(f"- [{name}]({url})")
                             st.markdown("\n".join(lines))
                         if elapsed is not None:
-                            st.caption(f"{elapsed}s · vertex_find_similar · corpus {st.session_state.sc_corpus}")
+                            st.caption(f"{elapsed}s · naive_find_similar · corpus {st.session_state.sc_corpus}")
 
                     sources = [{"title": r["title"], "uri": r["uri"]} for r in similar]
                     st.session_state.sc_messages.append({
@@ -295,14 +307,14 @@ if user_input:
                     )
 
                     if result.get("status") == "error":
-                        raise RuntimeError(result.get("message", "Erreur Vertex"))
+                        raise RuntimeError(result.get("message", "Naive RAG error"))
 
                     answer  = result.get("answer", "")
                     sources = result.get("sources", [])
                     elapsed = result.get("elapsed_s")
 
                     with st.chat_message("assistant"):
-                        st.markdown(answer)
+                        render_answer(answer, sources)
                         if sources:
                             with st.expander(f"Sources ({len(sources)})", expanded=False):
                                 render_sources(sources, pipeline="vertex")
@@ -329,7 +341,7 @@ if user_input:
 
                 all_indexes = [i["index_name"] for i in list_indexes()]
                 if not all_indexes:
-                    raise RuntimeError("Aucun index Hybrid disponible.")
+                    raise RuntimeError("No Hybrid indexes available.")
 
                 _drive_url = re.search(
                     r"https?://(?:drive|docs)\.google\.com/\S+", user_input, re.IGNORECASE
@@ -346,7 +358,7 @@ if user_input:
                     elapsed = round(time.perf_counter() - t0, 2)
 
                     if result.get("status") == "error":
-                        raise RuntimeError(result.get("message", "Erreur find_similar"))
+                        raise RuntimeError(result.get("message", "Error find_similar"))
 
                     similar_docs = result.get("results", [])
                     sources = [
@@ -354,8 +366,7 @@ if user_input:
                         for r in similar_docs
                     ]
                     answer = (
-                        f"Voici les **{len(similar_docs)} documents** les plus similaires "
-                        f"à votre document (recherche par similarité vectorielle) :"
+                        f"Here are the **{len(similar_docs)} most similar documents**:"
                     )
 
                     with st.chat_message("assistant"):
@@ -381,58 +392,87 @@ if user_input:
                         "elapsed_s": elapsed,
                     })
 
-                # ── Requête texte classique ───────────────────────────────────
+                # ── Text query ────────────────────────────────────────────────
                 else:
                     from services.vertex_service import synthesize_from_context
+                    from shared.query_rewriter import rewrite_query
+                    import time as _t
 
-                    with st.spinner("Détection des index pertinents…"):
-                        target_indexes = resolve_indexes(user_input, all_indexes)
+                    t_total = _t.perf_counter()
+                    timings: dict[str, float] = {}
 
-                    t0        = time.perf_counter()
+                    # Resolve indexes + rewrite query in parallel
+                    from concurrent.futures import ThreadPoolExecutor as _TPE
+                    t0 = _t.perf_counter()
+                    with _TPE(max_workers=2) as pool:
+                        f_resolve = pool.submit(resolve_indexes, user_input, all_indexes)
+                        f_rewrite = pool.submit(rewrite_query, user_input, context)
+                        target_indexes = f_resolve.result()
+                        rewritten = f_rewrite.result()
+                    timings["resolve+rewrite"] = round(_t.perf_counter() - t0, 2)
+
+                    # Retrieval
+                    t0 = _t.perf_counter()
                     retrieval = hybrid_multi_query(
                         index_names=target_indexes,
-                        query_text=user_input,
+                        query_text=rewritten,
                         context=context,
+                        retrieval_query=rewritten,
                     )
+                    timings["retrieval"] = round(_t.perf_counter() - t0, 2)
 
                     if retrieval.get("status") == "error":
-                        raise RuntimeError(retrieval.get("message", "Erreur Hybrid"))
+                        raise RuntimeError(retrieval.get("message", "Hybrid error"))
 
+                    # Merge inner timings (embedding, threads)
+                    inner = retrieval.get("timings", {})
+                    timings.update(inner)
+
+                    # Synthesis
+                    t0 = _t.perf_counter()
                     synth = synthesize_from_context(
                         query_text=user_input,
                         rag_context=retrieval.get("answer", ""),
                         conversation_context=context,
                     )
+                    timings["generation"] = round(_t.perf_counter() - t0, 2)
 
                     if synth.get("status") == "error":
-                        raise RuntimeError(synth.get("message", "Erreur de synthèse"))
+                        raise RuntimeError(synth.get("message", "Synthesis error"))
 
                     answer  = synth.get("answer", "")
                     sources = retrieval.get("sources", [])
-                    # single-index → flat chunks list; multi-index → flatten results_by_index
                     chunks  = retrieval.get("chunks") or [
                         c for cs in retrieval.get("results_by_index", {}).values()
                         for c in cs
                     ]
-                    elapsed = round(time.perf_counter() - t0, 2)
+                    elapsed = round(_t.perf_counter() - t_total, 2)
+                    timings["total"] = elapsed
+
                     index_label = (
                         target_indexes[0]
                         if len(target_indexes) == 1
-                        else f"{len(target_indexes)} index"
+                        else f"{len(target_indexes)} indexes"
                     )
 
-                    retrieval_query = retrieval.get("retrieval_query", "")
                     with st.chat_message("assistant"):
-                        st.markdown(answer)
+                        render_answer(answer, sources)
                         if sources:
                             with st.expander(f"Sources ({len(sources)})", expanded=False):
                                 render_sources(sources, pipeline="hybrid")
                         if chunks:
-                            with st.expander(f"Citations ({len(chunks)} chunks)", expanded=False):
+                            with st.expander(f"Retrieved chunks ({len(chunks)})", expanded=False):
                                 render_chunks(chunks)
+                        # Timing breakdown
+                        timing_parts = []
+                        for k in ("resolve+rewrite", "embedding", "threads", "generation"):
+                            if k in timings:
+                                timing_parts.append(f"{k} {timings[k]}s")
                         caption = f"{elapsed}s · {index_label}"
-                        if retrieval_query and retrieval_query != user_input:
-                            caption += f" · query : _{retrieval_query}_"
+                        if timing_parts:
+                            caption += f" · {' · '.join(timing_parts)}"
+                        if rewritten and rewritten != user_input:
+                            caption += f"\nretrieval query: _{rewritten}_"
                         st.caption(caption)
 
                     st.session_state.sc_messages.append({
@@ -442,6 +482,7 @@ if user_input:
                         "chunks":    chunks,
                         "pipeline":  "hybrid",
                         "elapsed_s": elapsed,
+                        "timings":   timings,
                     })
 
         except Exception as exc:

@@ -114,10 +114,10 @@ def resolve_indexes(query: str, available: list[str]) -> list[str]:
     # Build a human-readable description of the hierarchy for the LLM
     companies = _describe_hierarchy(available)
     hierarchy_hint = (
-        "Les index suivent la convention entreprise__notion.\n"
-        f"Hiérarchie :\n{companies}\n\n"
-        "Tu peux répondre avec un nom d'entreprise seul (ex: 'celio') pour "
-        "sélectionner tous ses sous-index, ou un index précis (ex: 'celio__rh').\n\n"
+        "Indexes follow the company__topic naming convention.\n"
+        f"Hierarchy:\n{companies}\n\n"
+        "You can respond with a company name alone (e.g. 'acme') to "
+        "select all its sub-indexes, or a specific index (e.g. 'acme__hr').\n\n"
     )
 
     # Extract company names for the prompt
@@ -126,24 +126,29 @@ def resolve_indexes(query: str, available: list[str]) -> list[str]:
     })
 
     prompt = (
-        f"Index disponibles : {', '.join(available)}\n"
+        f"Available indexes: {', '.join(available)}\n"
         f"{hierarchy_hint}"
-        f"Entreprises connues : {', '.join(company_names)}\n\n"
-        f"Requête : \"{query}\"\n\n"
-        "Sélectionne le ou les index pertinents pour répondre à cette requête.\n\n"
-        "Règles STRICTES (dans cet ordre) :\n"
-        "1. La requête mentionne-t-elle EXPLICITEMENT le nom d'une entreprise connue "
-        f"({', '.join(company_names)}) ?\n"
-        "   - OUI → retourne les index pertinents de CETTE entreprise (domaine + divers)\n"
-        "   - NON → retourne TOUS les index de TOUTES les entreprises\n"
-        "2. Un nom de produit, un sujet ou un thème ne suffit PAS à identifier une entreprise. "
-        "Seul le nom exact de l'entreprise compte.\n"
-        "3. Les index contenant 'divers', 'misc' ou 'autre' doivent TOUJOURS être inclus "
-        "dès qu'au moins un index de la même entreprise est sélectionné.\n"
-        "4. En cas de doute, retourne TOUS les index — il vaut mieux chercher trop large "
-        "que rater l'information.\n\n"
-        "Réponds UNIQUEMENT avec les noms d'index séparés par des virgules, "
-        "en minuscules, sans explication."
+        f"Known companies: {', '.join(company_names)}\n\n"
+        f"Query: \"{query}\"\n\n"
+        "Context: this is a customer care knowledge base. Advisors ask questions "
+        "about products, returns, sizing, delivery, warranties, policies, etc.\n\n"
+        "Select the relevant index(es) to answer this query.\n\n"
+        "STRICT rules (in this order):\n"
+        "1. Does the query EXPLICITLY mention the name of a known company "
+        f"({', '.join(company_names)})?\n"
+        "   - YES → return the relevant indexes for THAT company (topic + misc/divers)\n"
+        "   - NO → return ALL indexes from ALL companies\n"
+        "2. A product name, subject, or theme is NOT enough to identify a company. "
+        "Only the exact company name counts.\n"
+        "3. Indexes containing 'divers', 'misc', 'autre', 'support', 'customer', "
+        "'produit', 'product', 'faq', 'sav', 'retour', 'return' should be "
+        "PRIORITIZED for customer care queries (returns, sizing, products, delivery).\n"
+        "4. Indexes containing 'divers', 'misc', or 'autre' must ALWAYS be included "
+        "whenever at least one index from the same company is selected.\n"
+        "5. When in doubt, return ALL indexes — it is better to search too broadly "
+        "than to miss the information.\n\n"
+        "Respond ONLY with index names separated by commas, "
+        "in lowercase, without explanation."
     )
     try:
         from vertexai.generative_models import GenerativeModel

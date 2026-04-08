@@ -44,8 +44,8 @@ def render_error_message(message: str) -> None:
     with st.chat_message("assistant"):
         if "429" in message or "RESOURCE_EXHAUSTED" in message:
             st.warning(
-                "Le service est momentanément surchargé (quota API dépassé). "
-                "Veuillez réessayer dans quelques secondes."
+                "The service is temporarily overloaded (API quota exceeded). "
+                "Please try again in a few seconds."
             )
         else:
-            st.error(f"**Erreur** : {message}")
+            st.error(f"**Error**: {message}")

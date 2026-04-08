@@ -70,13 +70,13 @@ def render_tool_events(events: list[dict]) -> None:
             st.json(call.get("args", {}), expanded=False)
 
             if resp:
-                st.markdown("**Résultat**")
+                st.markdown("**Result**")
                 response_data = resp.get("response", {})
                 # Trim large fields for readability
                 display = _trim_response(response_data)
                 st.json(display, expanded=False)
             else:
-                st.caption("_(en attente de réponse)_")
+                st.caption("_(waiting for response)_")
 
 
 def _trim_response(data: dict, max_str_len: int = 400) -> dict:

@@ -41,15 +41,15 @@ def _highlight_sources(text: str, sources: list[dict]) -> str:
 
     _BADGE_LINK = (
         '<a href="{url}" target="_blank" '
-        'style="background:#E6F4ED;color:#006A4E;padding:2px 8px;'
+        'style="background:#EBF3FD;color:#4285F4;padding:2px 8px;'
         'border-radius:4px;font-size:0.82em;text-decoration:none;'
-        'border:1px solid #006A4E30;white-space:normal;'
+        'border:1px solid #4285F430;white-space:normal;'
         'margin:0 2px">{label}</a>'
     )
     _BADGE_SPAN = (
-        '<span style="background:#E6F4ED;color:#006A4E;padding:2px 8px;'
+        '<span style="background:#EBF3FD;color:#4285F4;padding:2px 8px;'
         'border-radius:4px;font-size:0.82em;'
-        'border:1px solid #006A4E30;white-space:normal;'
+        'border:1px solid #4285F430;white-space:normal;'
         'margin:0 2px">{label}</span>'
     )
 
@@ -108,7 +108,7 @@ def md_to_html(text: str) -> str:
         "border-collapse:collapse;width:100%;margin:8px 0;font-size:0.92em"
     )
     _TH_STYLE = (
-        "border:1px solid #D4E8DC;padding:6px 10px;background:#F5FAF7;"
+        "border:1px solid #C5D9F5;padding:6px 10px;background:#EBF3FD;"
         "text-align:left;font-weight:600"
     )
     _TD_STYLE = "border:1px solid #D4E8DC;padding:6px 10px"

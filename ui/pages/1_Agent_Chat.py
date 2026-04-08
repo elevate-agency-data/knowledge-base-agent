@@ -22,7 +22,7 @@ st.set_page_config(
 
 # ── Cached runner ─────────────────────────────────────────────────────────────
 
-@st.cache_resource(show_spinner="Chargement de l'agent…")
+@st.cache_resource(show_spinner="Loading AI agent...")
 def get_runner():
     from services.agent_runner import AgentRunner
     return AgentRunner()
@@ -76,21 +76,21 @@ _init()
 
 with st.sidebar:
     st.header("Agent Chat")
-    st.caption("Piloté par **Gemini 2.5 Pro** via Google ADK")
+    st.caption("Powered by **Gemini 2.5 Pro**")
     st.divider()
 
-    if st.button("Nouvelle conversation", use_container_width=True, type="primary"):
+    if st.button("New conversation", use_container_width=True, type="primary"):
         _new_session()
         st.rerun()
 
     st.divider()
-    st.markdown("**Conversations**")
+    st.markdown("**Sessions**")
 
     sessions = st.session_state.get("agent_sessions_cache", [])
     active_sid = _active_sid()
 
     if not sessions:
-        st.caption("_Aucune session trouvée_")
+        st.caption("_No sessions found_")
 
     for meta in sessions:
         sid       = meta["id"]
@@ -113,19 +113,19 @@ with st.sidebar:
             st.caption(str(n_msg))
 
     st.divider()
-    st.markdown("**Raccourcis**")
-    st.code("liste les notions")
-    st.code("crée un index [nom]")
-    st.code("ajoute le dossier [X] dans l'index [Y]")
-    st.code("Donne moi les fichiers similaires à ce document : https://drive.google.com/file/d/1q1d5AHjEgKfhOz3mkusT7azTLENStcn5/view?usp=sharing")
-    st.code("compare [Notion A] et [Notion B]")
+    st.markdown("**Quick actions**")
+    st.code("list all indexes")
+    st.code("create an index [name]")
+    st.code("add folder [X] to index [Y]")
+    st.code("Find documents similar to: https://drive.google.com/file/d/1q1d5AHjEgKfhOz3mkusT7azTLENStcn5/view?usp=sharing")
+    st.code("compare [Index A] and [Index B]")
 
     st.divider()
-    if st.button("Actualiser la liste", use_container_width=True):
+    if st.button("Refresh list", use_container_width=True):
         _refresh_sessions()
         st.rerun()
 
-    st.caption(f"Session ADK : `{active_sid[:16]}…`")
+    st.caption(f"ADK session: `{active_sid[:16]}…`")
 
 
 # ── Page title ────────────────────────────────────────────────────────────────
@@ -133,10 +133,10 @@ with st.sidebar:
 # Name = first user message or default
 sessions     = st.session_state.get("agent_sessions_cache", [])
 active_meta  = next((s for s in sessions if s["id"] == _active_sid()), None)
-session_name = active_meta["name"] if active_meta else "Nouvelle conversation"
+session_name = active_meta["name"] if active_meta else "New conversation"
 
 st.title(session_name)
-st.caption("L'agent choisit automatiquement Vertex AI RAG ou Hybrid RAG selon votre demande.")
+st.caption("The AI agent automatically selects the best retrieval pipeline for your question.")
 
 # ── Chat history ──────────────────────────────────────────────────────────────
 
@@ -159,7 +159,7 @@ for msg in _active_display():
 
 # ── Input ─────────────────────────────────────────────────────────────────────
 
-user_input = st.chat_input("Posez une question ou donnez une instruction à l'agent…")
+user_input = st.chat_input("Ask a question or give an instruction...")
 
 if user_input:
     from services.agent_runner import append_display
@@ -168,7 +168,7 @@ if user_input:
     render_user_message(user_input)
     append_display(sid, {"role": "user", "text": user_input})
 
-    with st.spinner("L'agent réfléchit…"):
+    with st.spinner("Thinking..."):
         try:
             runner  = get_runner()
             parsed  = runner.run(

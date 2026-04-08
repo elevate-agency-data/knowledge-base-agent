@@ -1,13 +1,16 @@
 """
-Knowledge Base Agent — Streamlit home page.
+Workshop Chatbot Knowledge Base — AI for Customer Care
+Streamlit home page.
 
 Entry point: streamlit run ui/app.py
-(from the project root so that rag_agent/ and hybrid/ are importable)
 """
 
-import path_setup  # noqa: F401 — fixe sys.path et CWD avant tout import projet
+import path_setup  # noqa: F401
 import streamlit as st
-from config import APP_TITLE, APP_ICON, LAYOUT, VERTEX_COLOR, HYBRID_COLOR
+from config import (
+    APP_TITLE, APP_SUBTITLE, APP_ICON, LAYOUT,
+    VERTEX_COLOR, HYBRID_COLOR, VERTEX_LABEL, HYBRID_LABEL,
+)
 
 st.set_page_config(
     page_title=APP_TITLE,
@@ -16,107 +19,122 @@ st.set_page_config(
 )
 
 # ── Header ────────────────────────────────────────────────────────────────────
-st.title(APP_TITLE)
-st.caption("Interface de gestion et d'interrogation des bases de connaissances RAG")
+st.markdown(
+    f"""
+    <div style="padding: 20px 0 10px 0;">
+    <h1 style="margin-bottom:4px;">{APP_TITLE}</h1>
+    <p style="font-size:1.1em; color:#555; margin-top:0;">{APP_SUBTITLE}</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.divider()
 
 # ── Pipeline overview ─────────────────────────────────────────────────────────
+st.subheader("Two approaches, one goal: smarter customer support")
+st.markdown(
+    "This platform lets you compare two AI-powered knowledge retrieval strategies "
+    "on your internal documents — so you can choose the best engine for your customer care chatbot."
+)
+
 col_v, col_h = st.columns(2)
 
 with col_v:
     st.markdown(
         f"""
-        <div style="border-left: 4px solid {VERTEX_COLOR}; padding-left: 12px;">
-        <h3 style="color:{VERTEX_COLOR}">Vertex AI RAG</h3>
+        <div style="border-left: 4px solid {VERTEX_COLOR};
+             border-radius: 0 8px 8px 0; padding: 12px 16px;">
+        <h3 style="color:{VERTEX_COLOR}; margin: 0">{VERTEX_LABEL}</h3>
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.markdown("""
-    - Corpus global hébergé sur Google Cloud
-    - Ingestion massive de dossiers Drive entiers
-    - Recherche sémantique via `text-embedding-005`
-    - Réponses générées par **Gemini 2.5 Pro**
+    - All documents stored in a **single cloud corpus**
+    - One-step ingestion from Google Drive
+    - AI retrieves and answers in a **single call**
+    - Fast setup, minimal configuration
     """)
-    st.info("Idéal pour : ingestion volumineuse, recherche globale sans isolation client")
+    st.info("Best for: quick deployment, broad search across all documents at once")
 
 with col_h:
     st.markdown(
         f"""
-        <div style="border-left: 4px solid {HYBRID_COLOR}; padding-left: 12px;">
-        <h3 style="color:{HYBRID_COLOR}">Hybrid RAG (local)</h3>
+        <div style="border-left: 4px solid {HYBRID_COLOR};
+             border-radius: 0 8px 8px 0; padding: 12px 16px;">
+        <h3 style="color:{HYBRID_COLOR}; margin: 0">{HYBRID_LABEL}</h3>
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.markdown("""
-    - Index locaux par client (DuckDB)
-    - Recherche **dense** (vecteurs) + **sparse** (BM25) → fusion RRF
-    - 5 modèles d'embedding disponibles (mpnet, e5, bge-m3…)
-    - Multi-client en un seul appel via `hybrid_multi_query`
+    - Documents organized **by client and topic**
+    - Combines keyword search + semantic understanding
+    - Queries across multiple clients in one request
+    - Higher precision, source-level traceability
     """)
-    st.info("Idéal pour : précision par client, comparaisons multi-index")
+    st.info("Best for: client-specific answers, precise sourcing, multi-tenant support")
 
 st.divider()
 
 # ── Navigation cards ──────────────────────────────────────────────────────────
-st.subheader("Navigation")
+st.subheader("Get started")
 
 nav1, nav2, nav3 = st.columns(3)
 
 with nav1:
-    st.markdown("### Agent Chat")
+    st.markdown("### Chat with the Agent")
     st.markdown(
-        "Interface conversationnelle complète. "
-        "L'agent choisit automatiquement le pipeline adapté "
-        "et expose les appels d'outils."
+        "Ask questions in natural language. "
+        "The AI agent automatically picks the right pipeline "
+        "and retrieves the most relevant answers from your knowledge base."
     )
 
 with nav2:
-    st.markdown("### Comparaison RAG")
+    st.markdown("### Side-by-Side Comparison")
     st.markdown(
-        "Pose la même question aux deux pipelines en parallèle. "
-        "Compare les réponses, les sources et les temps de réponse côte-à-côte."
+        "Send the same question to both pipelines at once. "
+        "Compare answer quality, cited sources, and response time head-to-head."
     )
 
 with nav3:
-    st.markdown("### Gestion des index")
+    st.markdown("### Knowledge Base Manager")
     st.markdown(
-        "Crée, inspecte et supprime des index hybrid. "
-        "Lance l'ingestion depuis Google Drive et surveille l'état de chaque index."
+        "Import documents from Google Drive, organize them by client and topic, "
+        "and monitor the health of your knowledge base."
     )
 
 st.divider()
 
 # ── Quick status ──────────────────────────────────────────────────────────────
-st.subheader("État rapide")
+st.subheader("System status")
 
 status_col_v, status_col_h = st.columns(2)
 
 with status_col_v:
-    with st.spinner("Chargement des corpus Vertex…"):
+    with st.spinner("Loading Naive RAG corpora..."):
         try:
             from services.vertex_service import list_corpora
             corpora = list_corpora()
-            st.metric("Corpus Vertex AI", len(corpora))
+            st.metric("Naive RAG Corpora", len(corpora))
             if corpora:
                 for c in corpora:
-                    st.caption(f"• {c['display_name']}")
+                    st.caption(f"- {c['display_name']}")
         except Exception as exc:
-            st.metric("Corpus Vertex AI", "—")
-            st.warning(f"Vertex non disponible : {exc}")
+            st.metric("Naive RAG Corpora", "---")
+            st.warning(f"Naive RAG unavailable: {exc}")
 
 with status_col_h:
-    with st.spinner("Chargement des index hybrid…"):
+    with st.spinner("Loading Hybrid RAG indexes..."):
         try:
             from services.hybrid_service import list_indexes
             indexes = list_indexes()
-            st.metric("Index Hybrid", len(indexes))
+            st.metric("Hybrid RAG Indexes", len(indexes))
             if indexes:
                 for idx in indexes:
                     chunks = idx.get("total_chunks", "?")
-                    st.caption(f"• {idx['index_name']}  ({chunks} chunks)")
+                    st.caption(f"- {idx['index_name']}  ({chunks} chunks)")
         except Exception as exc:
-            st.metric("Index Hybrid", "—")
-            st.warning(f"Hybrid non disponible : {exc}")
+            st.metric("Hybrid RAG Indexes", "---")
+            st.warning(f"Hybrid RAG unavailable: {exc}")

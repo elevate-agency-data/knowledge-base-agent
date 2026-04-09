@@ -110,31 +110,35 @@ st.divider()
 # ── Quick status ──────────────────────────────────────────────────────────────
 st.subheader("System status")
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _get_corpora():
+    from services.vertex_service import list_corpora
+    return list_corpora()
+
+@st.cache_data(ttl=120, show_spinner=False)
+def _get_indexes():
+    from services.hybrid_service import list_indexes
+    return list_indexes()
+
 status_col_v, status_col_h = st.columns(2)
 
 with status_col_v:
-    with st.spinner("Loading Naive RAG corpora..."):
-        try:
-            from services.vertex_service import list_corpora
-            corpora = list_corpora()
-            st.metric("Naive RAG Corpora", len(corpora))
-            if corpora:
-                for c in corpora:
-                    st.caption(f"- {c['display_name']}")
-        except Exception as exc:
-            st.metric("Naive RAG Corpora", "---")
-            st.warning(f"Naive RAG unavailable: {exc}")
+    try:
+        corpora = _get_corpora()
+        st.metric("Naive RAG Corpora", len(corpora))
+        for c in corpora:
+            st.caption(f"- {c['display_name']}")
+    except Exception as exc:
+        st.metric("Naive RAG Corpora", "---")
+        st.warning(f"Naive RAG unavailable: {exc}")
 
 with status_col_h:
-    with st.spinner("Loading Hybrid RAG indexes..."):
-        try:
-            from services.hybrid_service import list_indexes
-            indexes = list_indexes()
-            st.metric("Hybrid RAG Indexes", len(indexes))
-            if indexes:
-                for idx in indexes:
-                    chunks = idx.get("total_chunks", "?")
-                    st.caption(f"- {idx['index_name']}  ({chunks} chunks)")
-        except Exception as exc:
-            st.metric("Hybrid RAG Indexes", "---")
-            st.warning(f"Hybrid RAG unavailable: {exc}")
+    try:
+        indexes = _get_indexes()
+        st.metric("Hybrid RAG Indexes", len(indexes))
+        for idx in indexes:
+            chunks = idx.get("total_chunks", "?")
+            st.caption(f"- {idx['index_name']}  ({chunks} chunks)")
+    except Exception as exc:
+        st.metric("Hybrid RAG Indexes", "---")
+        st.warning(f"Hybrid RAG unavailable: {exc}")

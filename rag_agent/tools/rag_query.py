@@ -11,7 +11,8 @@ from vertexai import rag
 from ..config import (
     DEFAULT_DISTANCE_THRESHOLD,
     DEFAULT_TOP_K,
-    MODEL
+    MODEL,
+    GENERATION_SYSTEM_PROMPT,
 )
 from .utils import check_corpus_exists, get_corpus_resource_name
 from shared.query_rewriter import rewrite_query
@@ -72,7 +73,9 @@ def rag_query(
         )
 
         rag_model = GenerativeModel(
-        model_name=MODEL, tools=[rag_retrieval_tool]
+            model_name=MODEL,
+            system_instruction=GENERATION_SYSTEM_PROMPT,
+            tools=[rag_retrieval_tool],
         )
 
         response = rag_model.generate_content(retrieval_query)

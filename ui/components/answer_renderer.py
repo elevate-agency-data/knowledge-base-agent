@@ -83,13 +83,10 @@ def _highlight_sources(text: str, sources: list[dict]) -> str:
         badges = [_make_badge(c) for c in citations]
         return " " + " ".join(badges)
 
-    # Allow one level of nested parentheses, e.g. (NOVEMBRE (CUSTOMER CARE)__TOPIC - File)
-    _inner = r'(?:[^()]*|\([^()]*\))*'
-
     # Match parentheses containing __ (index references)
-    result = re.sub(rf'\(({_inner}__[^()]*(?:\([^()]*\)[^()]*)*)\)', _replace_parens, text)
+    result = re.sub(r'\(([^()]*__[^()]*)\)', _replace_parens, text)
     # Match parentheses containing file extensions
-    result = re.sub(rf'\(({_inner}\.(?:pdf|docx|xlsx|pptx|doc|txt)[^()]*)\)', _replace_parens, result)
+    result = re.sub(r'\(([^()]*\.(?:pdf|docx|xlsx|pptx|doc|txt)[^()]*)\)', _replace_parens, result)
 
     return result
 

@@ -14,9 +14,13 @@ from .alloydb_store import AlloyDBStore
 from hybrid.config import ENV, DUCKDB_PATH
 
 
+_store: BaseStore | None = None
+
+
 def get_store() -> BaseStore:
     """
     Return the store backend configured for the current environment.
+    Singleton — même instance réutilisée à chaque appel (connexion persistante).
 
     Reads ``hybrid.config.ENV``:
     - ``"local"`` → DuckDB at ``hybrid.config.DUCKDB_PATH``
@@ -25,9 +29,10 @@ def get_store() -> BaseStore:
     Returns:
         A :class:`BaseStore` implementation ready to be initialised.
     """
-    if ENV == "gcp":
-        return AlloyDBStore()
-    return DuckDBStore(DUCKDB_PATH)
+    global _store
+    if _store is None:
+        _store = AlloyDBStore() if ENV == "gcp" else DuckDBStore(DUCKDB_PATH)
+    return _store
 
 
 __all__ = [

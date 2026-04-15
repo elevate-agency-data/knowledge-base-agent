@@ -1,17 +1,16 @@
 """
 Page 5 — Simple Chat
 
-Interface simplifiée pour utilisateurs non-techniques.
-Un toggle active ou désactive le RAG. Quand le RAG est actif, le pipeline
-(Naive RAG ou Hybrid) est sélectionné en sidebar.
-
-Hybrid RAG : les index pertinents sont détectés automatiquement via Gemini Flash
-             (fallback sur tous les index si aucun n'est identifié).
+Interface simplifiée avec sessions persistantes par utilisateur.
+Chaque session mémorise l'état RAG (on/off, pipeline, corpus).
+Accès réservé aux utilisateurs authentifiés.
 """
 
 import path_setup  # noqa: F401
 import streamlit as st
 from config import APP_TITLE
+from auth import require_auth
+from components.sidebar_auth import render_sidebar_nav, render_sidebar_user_info
 
 st.set_page_config(
     page_title=f"Chat — {APP_TITLE}",
@@ -19,28 +18,49 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── Auth guard ────────────────────────────────────────────────────────────────
+
+user    = require_auth()
+USER_ID = user["id"]
+
 # ── Constantes ────────────────────────────────────────────────────────────────
 
 _PIPELINE_VERTEX = "Naive RAG"
 _PIPELINE_HYBRID = "Hybrid RAG"
 _PIPELINES       = [_PIPELINE_VERTEX, _PIPELINE_HYBRID]
 
-# ── Session state ─────────────────────────────────────────────────────────────
 
-def _init() -> None:
-    defaults = {
-        "sc_messages":  [],
-        "sc_rag_on":    False,
-        "sc_pipeline":  _PIPELINE_HYBRID,
-        "sc_corpus":    None,
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
+# ── Helpers session ───────────────────────────────────────────────────────────
+
+def _load_session_into_state(sess: dict) -> None:
+    """Charge une session DB dans st.session_state."""
+    from services.chat_store import sc_load_messages
+    st.session_state.sc_active_session_id = sess["id"]
+    st.session_state.sc_rag_on            = bool(sess["rag_on"])
+    st.session_state.sc_pipeline          = sess["pipeline"] or _PIPELINE_HYBRID
+    st.session_state.sc_corpus            = sess["corpus"]
+    st.session_state.sc_messages          = sc_load_messages(sess["id"])
 
 
-def _clear() -> None:
-    st.session_state.sc_messages = []
+def _refresh_sessions() -> None:
+    from services.chat_store import sc_list_sessions
+    st.session_state.sc_sessions_cache = sc_list_sessions(USER_ID)
+
+
+def _create_and_switch(
+    rag_on:   bool        = False,
+    pipeline: str | None  = None,
+    corpus:   str | None  = None,
+) -> None:
+    """Crée une nouvelle session avec les paramètres donnés et bascule dessus."""
+    from services.chat_store import sc_new_session
+    sess = sc_new_session(USER_ID, rag_on=rag_on, pipeline=pipeline, corpus=corpus)
+    _load_session_into_state({**sess, "messages": []})
+    _refresh_sessions()
+
+
+def _active_sid() -> str:
+    return st.session_state.sc_active_session_id
 
 
 def _build_context(n_pairs: int = 4) -> str:
@@ -52,24 +72,44 @@ def _build_context(n_pairs: int = 4) -> str:
     return "\n".join(lines)
 
 
+# ── Init ──────────────────────────────────────────────────────────────────────
+
+def _init() -> None:
+    if "sc_active_session_id" not in st.session_state:
+        from services.chat_store import sc_list_sessions
+        sessions = sc_list_sessions(USER_ID)
+        if sessions:
+            _load_session_into_state(sessions[0])
+        else:
+            _create_and_switch()
+        _refresh_sessions()
+
+
 _init()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
+    render_sidebar_nav()
+    st.divider()
     st.header("Simple Chat")
     st.divider()
 
+    # ── Nouvelle conversation ─────────────────────────────────────────────────
+    if st.button("New conversation", use_container_width=True, type="primary"):
+        _create_and_switch(
+            rag_on   = st.session_state.sc_rag_on,
+            pipeline = st.session_state.sc_pipeline,
+            corpus   = st.session_state.sc_corpus,
+        )
+        st.rerun()
+
     # ── Toggle RAG ────────────────────────────────────────────────────────────
-    rag_on = st.toggle(
-        "RAG enabled",
-        value=st.session_state.sc_rag_on,
-    )
+    st.divider()
+    rag_on = st.toggle("RAG enabled", value=st.session_state.sc_rag_on)
 
     if rag_on != st.session_state.sc_rag_on:
-        st.session_state.sc_rag_on = rag_on
-        st.session_state.sc_corpus = None
-        _clear()
+        _create_and_switch(rag_on=rag_on, pipeline=st.session_state.sc_pipeline)
         st.rerun()
 
     # ── Options RAG ───────────────────────────────────────────────────────────
@@ -84,9 +124,7 @@ with st.sidebar:
         )
 
         if pipeline != st.session_state.sc_pipeline:
-            st.session_state.sc_pipeline = pipeline
-            st.session_state.sc_corpus   = None
-            _clear()
+            _create_and_switch(rag_on=True, pipeline=pipeline)
             st.rerun()
 
         st.divider()
@@ -102,11 +140,15 @@ with st.sidebar:
             if corpus_names:
                 current = st.session_state.sc_corpus
                 default = corpus_names.index(current) if current in corpus_names else 0
-                selected = st.selectbox("Corpus", corpus_names, index=default,
-                                        label_visibility="collapsed")
+                selected = st.selectbox(
+                    "Corpus", corpus_names, index=default,
+                    label_visibility="collapsed",
+                )
                 if selected != st.session_state.sc_corpus:
+                    from services.chat_store import sc_update_settings
                     st.session_state.sc_corpus = selected
-                    _clear()
+                    sc_update_settings(_active_sid(), rag_on=True,
+                                       pipeline=pipeline, corpus=selected)
                     st.rerun()
             else:
                 st.warning("No corpus available.")
@@ -130,13 +172,7 @@ with st.sidebar:
             else:
                 st.warning("No indexes available.")
 
-    st.divider()
-
-    if st.button("New conversation", use_container_width=True, type="primary"):
-        _clear()
-        st.rerun()
-
-    # ── Status badge ──────────────────────────────────────────────────────────
+    # ── Badge statut ──────────────────────────────────────────────────────────
     st.divider()
     if not rag_on:
         st.info("Chatbot Gemini\nWithout RAG enrichment")
@@ -146,8 +182,48 @@ with st.sidebar:
     else:
         st.success("Hybrid RAG\nIndexes auto-detected")
 
+    # ── Liste des sessions ────────────────────────────────────────────────────
+    st.divider()
+    st.markdown("**Sessions**")
+    sessions_cache = st.session_state.get("sc_sessions_cache", [])
+    active_sid     = _active_sid()
+
+    if not sessions_cache:
+        st.caption("_Aucune session_")
+
+    for sess in sessions_cache:
+        sid       = sess["id"]
+        is_active = sid == active_sid
+        n_msg     = sess["msg_count"]
+        label     = f"{'▶ ' if is_active else ''}{sess['name']}"
+
+        col_btn, col_del = st.columns([5, 1])
+        with col_btn:
+            if st.button(
+                label,
+                key=f"sc_sw_{sid}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+                help=f"{n_msg} message{'s' if n_msg != 1 else ''}",
+            ):
+                _load_session_into_state(sess)
+                st.rerun()
+        with col_del:
+            if st.button("✕", key=f"sc_del_{sid}", help="Supprimer"):
+                from services.chat_store import sc_delete_session
+                sc_delete_session(sid)
+                if sid == active_sid:
+                    _create_and_switch()
+                else:
+                    _refresh_sessions()
+                st.rerun()
+
+    render_sidebar_user_info()
+
 
 # ── Page header ───────────────────────────────────────────────────────────────
+
+rag_on = st.session_state.sc_rag_on
 
 st.title("Chat")
 
@@ -188,10 +264,10 @@ for msg in st.session_state.sc_messages:
             if chunks:
                 with st.expander(f"Retrieved chunks ({len(chunks)})", expanded=False):
                     render_chunks(chunks)
-            # Timing
             timing_parts: list[str] = []
             if timings:
-                for k in ("resolve_and_rewrite", "rewrite_query", "embedding", "threads", "search", "generation"):
+                for k in ("resolve_and_rewrite", "rewrite_query", "embedding",
+                          "threads", "search", "generation"):
                     if k in timings:
                         label = k.replace("_", " ").replace("and", "+")
                         timing_parts.append(f"{label} {timings[k]}s")
@@ -223,10 +299,14 @@ _placeholder = (
 user_input = st.chat_input(_placeholder, disabled=not _ready)
 
 if user_input:
-    st.session_state.sc_messages.append({"role": "user", "text": user_input})
-    render_user_message(user_input)
+    from services.chat_store import sc_append_message
 
+    sid     = _active_sid()
     context = _build_context()
+
+    st.session_state.sc_messages.append({"role": "user", "text": user_input})
+    sc_append_message(sid, USER_ID, {"role": "user", "text": user_input})
+    render_user_message(user_input)
 
     with st.spinner("Searching..."):
         try:
@@ -235,7 +315,6 @@ if user_input:
             if not rag_on:
                 from services.vertex_service import direct_query
                 result   = direct_query(user_input, context=context)
-                pipeline = "hybrid"
 
                 if result.get("status") == "error":
                     raise RuntimeError(result.get("message", "Error"))
@@ -248,28 +327,25 @@ if user_input:
                     if elapsed is not None:
                         st.caption(f"{elapsed}s")
 
-                st.session_state.sc_messages.append({
-                    "role":      "assistant",
-                    "text":      answer,
-                    "sources":   [],
-                    "elapsed_s": elapsed,
-                })
+                msg = {"role": "assistant", "text": answer,
+                       "sources": [], "elapsed_s": elapsed}
+                st.session_state.sc_messages.append(msg)
+                sc_append_message(sid, USER_ID, msg)
 
-            # ── Naive RAG RAG ─────────────────────────────────────────────────
+            # ── Naive RAG ─────────────────────────────────────────────────────
             elif st.session_state.sc_pipeline == _PIPELINE_VERTEX:
                 import re as _re
                 _drive_url = _re.search(
-                    r"https?://(?:drive|docs)\.google\.com/\S+", user_input, _re.IGNORECASE
+                    r"https?://(?:drive|docs)\.google\.com/\S+",
+                    user_input, _re.IGNORECASE,
                 )
 
                 if _drive_url:
-                    # Drive URL → similarité documentaire via Vertex
                     from services.vertex_service import find_similar as vertex_find_similar
                     result = vertex_find_similar(
                         corpus_name=st.session_state.sc_corpus,
                         document_url=_drive_url.group(0),
                     )
-
                     if result.get("status") == "error":
                         raise RuntimeError(result.get("message", "Naive RAG find_similar error"))
 
@@ -280,23 +356,22 @@ if user_input:
                     with st.chat_message("assistant"):
                         st.markdown(answer)
                         if similar:
-                            lines = []
-                            for r in similar:
-                                url  = r.get("uri", "")
-                                name = r.get("title", url)
-                                lines.append(f"- [{name}]({url})")
+                            lines = [
+                                f"- [{r.get('title', r.get('uri', ''))}]({r.get('uri', '')})"
+                                for r in similar
+                            ]
                             st.markdown("\n".join(lines))
                         if elapsed is not None:
-                            st.caption(f"{elapsed}s · naive_find_similar · corpus {st.session_state.sc_corpus}")
+                            st.caption(
+                                f"{elapsed}s · naive_find_similar · "
+                                f"corpus {st.session_state.sc_corpus}"
+                            )
 
                     sources = [{"title": r["title"], "uri": r["uri"]} for r in similar]
-                    st.session_state.sc_messages.append({
-                        "role":      "assistant",
-                        "text":      answer,
-                        "sources":   sources,
-                        "pipeline":  "vertex",
-                        "elapsed_s": elapsed,
-                    })
+                    msg = {"role": "assistant", "text": answer,
+                           "sources": sources, "pipeline": "vertex", "elapsed_s": elapsed}
+                    st.session_state.sc_messages.append(msg)
+                    sc_append_message(sid, USER_ID, msg)
 
                 else:
                     from services.vertex_service import query as vertex_query
@@ -305,7 +380,6 @@ if user_input:
                         query_text=user_input,
                         context=context,
                     )
-
                     if result.get("status") == "error":
                         raise RuntimeError(result.get("message", "Naive RAG error"))
 
@@ -321,15 +395,12 @@ if user_input:
                         if elapsed is not None:
                             st.caption(f"{elapsed}s")
 
-                    st.session_state.sc_messages.append({
-                        "role":      "assistant",
-                        "text":      answer,
-                        "sources":   sources,
-                        "pipeline":  "vertex",
-                        "elapsed_s": elapsed,
-                    })
+                    msg = {"role": "assistant", "text": answer,
+                           "sources": sources, "pipeline": "vertex", "elapsed_s": elapsed}
+                    st.session_state.sc_messages.append(msg)
+                    sc_append_message(sid, USER_ID, msg)
 
-            # ── Hybrid RAG — résolution automatique des index ─────────────────
+            # ── Hybrid RAG ────────────────────────────────────────────────────
             else:
                 import re
                 import time
@@ -344,10 +415,10 @@ if user_input:
                     raise RuntimeError("No Hybrid indexes available.")
 
                 _drive_url = re.search(
-                    r"https?://(?:drive|docs)\.google\.com/\S+", user_input, re.IGNORECASE
+                    r"https?://(?:drive|docs)\.google\.com/\S+",
+                    user_input, re.IGNORECASE,
                 )
 
-                # ── Similarité documentaire (URL Drive détectée) ──────────────
                 if _drive_url:
                     from hybrid.tools.hybrid_find_similar import hybrid_find_similar
                     t0     = time.perf_counter()
@@ -356,33 +427,29 @@ if user_input:
                         index_names=all_indexes,
                     )
                     elapsed = round(time.perf_counter() - t0, 2)
-
                     if result.get("status") == "error":
                         raise RuntimeError(result.get("message", "Error find_similar"))
 
                     similar_docs = result.get("results", [])
-                    sources = [
+                    sources      = [
                         {"file_name": r["file_name"], "source_url": r["source_url"]}
                         for r in similar_docs
                     ]
-                    answer = (
-                        f"Here are the **{len(similar_docs)} most similar documents**:"
-                    )
+                    answer = f"Here are the **{len(similar_docs)} most similar documents**:"
 
                     with st.chat_message("assistant"):
                         st.markdown(answer)
                         if similar_docs:
-                            lines = []
-                            for r in similar_docs:
-                                score = round(r.get("score", 0) * 100, 1)
-                                url   = r.get("source_url", "")
-                                name  = r.get("file_name", url)
-                                idx   = r.get("index_name", "")
-                                lines.append(f"- [{name}]({url}) · `{idx}` · {score}%")
+                            lines = [
+                                f"- [{r.get('file_name', '')}]({r.get('source_url', '')}) "
+                                f"· `{r.get('index_name', '')}` "
+                                f"· {round(r.get('score', 0) * 100, 1)}%"
+                                for r in similar_docs
+                            ]
                             st.markdown("\n".join(lines))
                         st.caption(f"{elapsed}s · {len(all_indexes)} index")
 
-                    st.session_state.sc_messages.append({
+                    msg = {
                         "role":      "assistant",
                         "text":      answer + "\n" + "\n".join(
                             f"- {r['file_name']}" for r in similar_docs
@@ -390,28 +457,27 @@ if user_input:
                         "sources":   sources,
                         "pipeline":  "hybrid",
                         "elapsed_s": elapsed,
-                    })
+                    }
+                    st.session_state.sc_messages.append(msg)
+                    sc_append_message(sid, USER_ID, msg)
 
-                # ── Text query ────────────────────────────────────────────────
                 else:
                     from services.vertex_service import synthesize_from_context
                     from shared.query_rewriter import rewrite_query
                     import time as _t
+                    from concurrent.futures import ThreadPoolExecutor as _TPE
 
                     t_total = _t.perf_counter()
                     timings: dict[str, float] = {}
 
-                    # Resolve indexes + rewrite query in parallel
-                    from concurrent.futures import ThreadPoolExecutor as _TPE
                     t0 = _t.perf_counter()
                     with _TPE(max_workers=2) as pool:
                         f_resolve = pool.submit(resolve_indexes, user_input, all_indexes)
                         f_rewrite = pool.submit(rewrite_query, user_input, context)
                         target_indexes = f_resolve.result()
-                        rewritten = f_rewrite.result()
+                        rewritten      = f_rewrite.result()
                     timings["resolve+rewrite"] = round(_t.perf_counter() - t0, 2)
 
-                    # Retrieval
                     t0 = _t.perf_counter()
                     retrieval = hybrid_multi_query(
                         index_names=target_indexes,
@@ -424,11 +490,8 @@ if user_input:
                     if retrieval.get("status") == "error":
                         raise RuntimeError(retrieval.get("message", "Hybrid error"))
 
-                    # Merge inner timings (embedding, threads)
-                    inner = retrieval.get("timings", {})
-                    timings.update(inner)
+                    timings.update(retrieval.get("timings", {}))
 
-                    # Synthesis
                     t0 = _t.perf_counter()
                     synth = synthesize_from_context(
                         query_text=user_input,
@@ -463,7 +526,6 @@ if user_input:
                         if chunks:
                             with st.expander(f"Retrieved chunks ({len(chunks)})", expanded=False):
                                 render_chunks(chunks)
-                        # Timing breakdown
                         timing_parts = []
                         for k in ("resolve+rewrite", "embedding", "threads", "generation"):
                             if k in timings:
@@ -475,7 +537,7 @@ if user_input:
                             caption += f"\nretrieval query: _{rewritten}_"
                         st.caption(caption)
 
-                    st.session_state.sc_messages.append({
+                    msg = {
                         "role":      "assistant",
                         "text":      answer,
                         "sources":   sources,
@@ -483,13 +545,16 @@ if user_input:
                         "pipeline":  "hybrid",
                         "elapsed_s": elapsed,
                         "timings":   timings,
-                    })
+                    }
+                    st.session_state.sc_messages.append(msg)
+                    sc_append_message(sid, USER_ID, msg)
 
         except Exception as exc:
             error_msg = str(exc)
             render_error_message(error_msg)
-            st.session_state.sc_messages.append(
-                {"role": "error", "text": error_msg}
-            )
+            err = {"role": "error", "text": error_msg}
+            st.session_state.sc_messages.append(err)
+            sc_append_message(sid, USER_ID, err)
 
+    _refresh_sessions()
     st.rerun()

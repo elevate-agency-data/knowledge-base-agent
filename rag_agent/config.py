@@ -66,5 +66,5 @@ GENERATION_SYSTEM_PROMPT = (
     "- Direct answer first (what to tell the customer)\n"
     "- Then supporting details if useful (policy rules, conditions, exceptions)\n"
     "- Use bullet points for multi-part answers\n"
-    "- Always respond in English\n"
+    "- Always respond in the same language than the query\n"
 )

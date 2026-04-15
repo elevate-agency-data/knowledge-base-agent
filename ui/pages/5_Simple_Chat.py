@@ -105,8 +105,10 @@ with st.sidebar:
         st.rerun()
 
     # ── Toggle RAG ────────────────────────────────────────────────────────────
-    st.divider()
-    rag_on = st.toggle("RAG enabled", value=st.session_state.sc_rag_on)
+    rag_on = st.toggle(
+        "RAG activation",
+        value=st.session_state.sc_rag_on,
+    )
 
     if rag_on != st.session_state.sc_rag_on:
         _create_and_switch(rag_on=rag_on, pipeline=st.session_state.sc_pipeline)

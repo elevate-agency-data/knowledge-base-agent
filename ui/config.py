@@ -29,7 +29,6 @@ HYBRID_LABEL    = "Hybrid RAG"
 
 # ── Agent ─────────────────────────────────────────────────────────────────────
 ADK_APP_NAME    = "kb_streamlit"
-ADK_USER_ID     = "streamlit_user"
 
 # ── Hybrid defaults ───────────────────────────────────────────────────────────
 DEFAULT_TOP_K           = 10

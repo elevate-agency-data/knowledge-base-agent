@@ -1,144 +1,61 @@
 """
 Workshop Chatbot Knowledge Base — AI for Customer Care
-Streamlit home page.
+Point d'entrée Streamlit : router de navigation dynamique.
+
+Toutes les pages sont toujours enregistrées (position="hidden") pour éviter
+le "Page not found" quand la session expire au refresh du navigateur.
+L'accès est contrôlé par les guards require_auth/require_admin dans chaque page.
+La sidebar de navigation est rendue par render_sidebar_nav() (sidebar_auth.py).
 
 Entry point: streamlit run ui/app.py
 """
 
 import path_setup  # noqa: F401
 import streamlit as st
-from config import (
-    APP_TITLE, APP_SUBTITLE, APP_ICON, LAYOUT,
-    VERTEX_COLOR, HYBRID_COLOR, VERTEX_LABEL, HYBRID_LABEL,
-)
 
-st.set_page_config(
-    page_title=APP_TITLE,
-    page_icon=APP_ICON,
-    layout=LAYOUT,
-)
 
-# ── Header ────────────────────────────────────────────────────────────────────
-st.markdown(
-    f"""
-    <div style="padding: 20px 0 10px 0;">
-    <h1 style="margin-bottom:4px;">{APP_TITLE}</h1>
-    <p style="font-size:1.1em; color:#555; margin-top:0;">{APP_SUBTITLE}</p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+# ── Warmup — préchargement au démarrage pour éviter le cold start ─────────────
 
-st.divider()
+@st.cache_resource(show_spinner=False)
+def _warmup():
+    """
+    Charge le modèle d'embedding et ouvre la connexion DuckDB en arrière-plan
+    dès le lancement de l'app, avant que le premier user ne fasse une requête.
+    """
+    import threading
 
-# ── Pipeline overview ─────────────────────────────────────────────────────────
-st.subheader("Two approaches, one goal: smarter customer support")
-st.markdown(
-    "This platform lets you compare two AI-powered knowledge retrieval strategies "
-    "on your internal documents — so you can choose the best engine for your customer care chatbot."
-)
+    def _load():
+        try:
+            from hybrid.embeddings import get_embedding_model
+            from hybrid.config import DEFAULT_EMBEDDING_MODEL
+            # Déclenche le chargement SentenceTransformer (~270 Mo, ~15s)
+            get_embedding_model(DEFAULT_EMBEDDING_MODEL).embed_query("warmup")
+        except Exception:
+            pass
+        try:
+            from hybrid.stores import get_store
+            # Ouvre la connexion DuckDB et charge les extensions VSS/FTS
+            get_store()._get_conn()
+        except Exception:
+            pass
 
-col_v, col_h = st.columns(2)
+    threading.Thread(target=_load, daemon=True).start()
 
-with col_v:
-    st.markdown(
-        f"""
-        <div style="border-left: 4px solid {VERTEX_COLOR};
-             border-radius: 0 8px 8px 0; padding: 12px 16px;">
-        <h3 style="color:{VERTEX_COLOR}; margin: 0">{VERTEX_LABEL}</h3>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown("""
-    - All documents stored in a **single cloud corpus**
-    - One-step ingestion from Google Drive
-    - AI retrieves and answers in a **single call**
-    - Fast setup, minimal configuration
-    """)
-    st.info("Best for: quick deployment, broad search across all documents at once")
 
-with col_h:
-    st.markdown(
-        f"""
-        <div style="border-left: 4px solid {HYBRID_COLOR};
-             border-radius: 0 8px 8px 0; padding: 12px 16px;">
-        <h3 style="color:{HYBRID_COLOR}; margin: 0">{HYBRID_LABEL}</h3>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.markdown("""
-    - Documents organized **by client and topic**
-    - Combines keyword search + semantic understanding
-    - Queries across multiple clients in one request
-    - Higher precision, source-level traceability
-    """)
-    st.info("Best for: client-specific answers, precise sourcing, multi-tenant support")
+_warmup()
 
-st.divider()
+# Toutes les pages enregistrées — sidebar gérée manuellement par chaque page.
+# Login est la page par défaut (URL racine / session expirée).
+pages = [
+    st.Page("pages/0_Login.py",          title="Login",          default=True),
+    st.Page("pages/Home.py",             title="Accueil"),
+    st.Page("pages/1_Agent_Chat.py",     title="Agent Chat"),
+    st.Page("pages/5_Simple_Chat.py",    title="Simple Chat"),
+    st.Page("pages/3_Index_Manager.py",  title="Knowledge Base"),
+    st.Page("pages/4_Benchmark.py",      title="Benchmark"),
+    st.Page("pages/2_RAG_Comparison.py", title="RAG Comparison"),
+    st.Page("pages/6_Admin.py",          title="Administration"),
+]
 
-# ── Navigation cards ──────────────────────────────────────────────────────────
-st.subheader("Get started")
-
-nav1, nav2, nav3 = st.columns(3)
-
-with nav1:
-    st.markdown("### Chat with the Agent")
-    st.markdown(
-        "Ask questions in natural language. "
-        "The AI agent automatically picks the right pipeline "
-        "and retrieves the most relevant answers from your knowledge base."
-    )
-
-with nav2:
-    st.markdown("### Side-by-Side Comparison")
-    st.markdown(
-        "Send the same question to both pipelines at once. "
-        "Compare answer quality, cited sources, and response time head-to-head."
-    )
-
-with nav3:
-    st.markdown("### Knowledge Base Manager")
-    st.markdown(
-        "Import documents from Google Drive, organize them by client and topic, "
-        "and monitor the health of your knowledge base."
-    )
-
-st.divider()
-
-# ── Quick status ──────────────────────────────────────────────────────────────
-st.subheader("System status")
-
-@st.cache_data(ttl=120, show_spinner=False)
-def _get_corpora():
-    from services.vertex_service import list_corpora
-    return list_corpora()
-
-@st.cache_data(ttl=120, show_spinner=False)
-def _get_indexes():
-    from services.hybrid_service import list_indexes
-    return list_indexes()
-
-status_col_v, status_col_h = st.columns(2)
-
-with status_col_v:
-    try:
-        corpora = _get_corpora()
-        st.metric("Naive RAG Corpora", len(corpora))
-        for c in corpora:
-            st.caption(f"- {c['display_name']}")
-    except Exception as exc:
-        st.metric("Naive RAG Corpora", "---")
-        st.warning(f"Naive RAG unavailable: {exc}")
-
-with status_col_h:
-    try:
-        indexes = _get_indexes()
-        st.metric("Hybrid RAG Indexes", len(indexes))
-        for idx in indexes:
-            chunks = idx.get("total_chunks", "?")
-            st.caption(f"- {idx['index_name']}  ({chunks} chunks)")
-    except Exception as exc:
-        st.metric("Hybrid RAG Indexes", "---")
-        st.warning(f"Hybrid RAG unavailable: {exc}")
+pg = st.navigation(pages, position="hidden")
+pg.run()

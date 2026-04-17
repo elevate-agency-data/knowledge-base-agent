@@ -49,8 +49,13 @@ def _search_one_index(
     print(f"[multi_query] thread {tid} START  index={index_name}")
 
     try:
-        # Thread-local store — DuckDB connections are not thread-safe
-        thread_store = get_store()
+        # Each thread needs its own DuckDB connection — get_store() is a
+        # singleton and would return the same connection to all threads,
+        # causing concurrent access to the same DuckDB handle → SIGSEGV.
+        from hybrid.config import ENV, DUCKDB_PATH
+        from hybrid.stores.duckdb_store import DuckDBStore
+        from hybrid.stores.alloydb_store import AlloyDBStore
+        thread_store = DuckDBStore(DUCKDB_PATH) if ENV != "gcp" else get_store()
 
         dense_results: list[dict] = []
         sparse_results: list[dict] = []

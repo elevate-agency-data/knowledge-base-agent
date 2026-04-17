@@ -25,6 +25,14 @@ st.set_page_config(
     layout="wide",
 )
 
+from auth import require_auth
+from components.sidebar_auth import render_sidebar_user
+require_auth()
+is_admin = st.session_state.get("is_admin", False)
+
+with st.sidebar:
+    render_sidebar_user()
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -113,65 +121,67 @@ with tab_list:
                     if created:
                         st.caption(f"Created {str(created)[:19]}")
 
-                    if st.button(f"Delete `{name}`", key=f"del_{name}", type="secondary"):
-                        st.session_state[f"confirm_delete_{name}"] = True
+                    if is_admin:
+                        if st.button(f"Delete `{name}`", key=f"del_{name}", type="secondary"):
+                            st.session_state[f"confirm_delete_{name}"] = True
 
-                    if st.session_state.get(f"confirm_delete_{name}"):
-                        st.warning(
-                            f"Are you sure you want to delete **{name}** "
-                            f"({chunks} chunks)? This cannot be undone."
-                        )
-                        col_yes, col_no = st.columns(2)
-                        with col_yes:
-                            if st.button("Confirm", key=f"yes_{name}", type="primary"):
-                                from services.hybrid_service import delete_index
-                                result = delete_index(name)
-                                if result.get("status") == "success":
-                                    st.success(result["message"])
+                        if st.session_state.get(f"confirm_delete_{name}"):
+                            st.warning(
+                                f"Are you sure you want to delete **{name}** "
+                                f"({chunks} chunks)? This cannot be undone."
+                            )
+                            col_yes, col_no = st.columns(2)
+                            with col_yes:
+                                if st.button("Confirm", key=f"yes_{name}", type="primary"):
+                                    from services.hybrid_service import delete_index
+                                    result = delete_index(name)
+                                    if result.get("status") == "success":
+                                        st.success(result["message"])
+                                        st.session_state.pop(f"confirm_delete_{name}", None)
+                                        _refresh()
+                                    else:
+                                        st.error(result.get("message", "Error"))
+                            with col_no:
+                                if st.button("Cancel", key=f"no_{name}"):
                                     st.session_state.pop(f"confirm_delete_{name}", None)
-                                    _refresh()
-                                else:
-                                    st.error(result.get("message", "Error"))
-                        with col_no:
-                            if st.button("Cancel", key=f"no_{name}"):
-                                st.session_state.pop(f"confirm_delete_{name}", None)
-                                st.rerun()
+                                    st.rerun()
 
                     st.divider()
 
-                all_names = [i["index_name"] for i in idxs]
-                if len(all_names) > 1:
-                    if st.button(
-                        f"Delete all indexes for **{company.upper()}**",
-                        key=f"del_company_{company}",
-                        type="secondary",
-                    ):
-                        st.session_state[f"confirm_delete_company_{company}"] = True
+                if is_admin:
+                    all_names = [i["index_name"] for i in idxs]
+                    if len(all_names) > 1:
+                        if st.button(
+                            f"Delete all indexes for **{company.upper()}**",
+                            key=f"del_company_{company}",
+                            type="secondary",
+                        ):
+                            st.session_state[f"confirm_delete_company_{company}"] = True
 
-                    if st.session_state.get(f"confirm_delete_company_{company}"):
-                        st.warning(
-                            f"Are you sure you want to delete **{len(all_names)} indexes** "
-                            f"for {company.upper()} ({total_chunks} chunks)? This cannot be undone."
-                        )
-                        col_yes, col_no = st.columns(2)
-                        with col_yes:
-                            if st.button("Confirm all", key=f"yes_company_{company}", type="primary"):
-                                from services.hybrid_service import delete_index
-                                errors = []
-                                for n in all_names:
-                                    r = delete_index(n)
-                                    if r.get("status") != "success":
-                                        errors.append(n)
-                                if not errors:
-                                    st.success(f"All indexes for {company.upper()} deleted.")
-                                else:
-                                    st.error(f"Failed to delete: {', '.join(errors)}")
-                                st.session_state.pop(f"confirm_delete_company_{company}", None)
-                                _refresh()
-                        with col_no:
-                            if st.button("Cancel", key=f"no_company_{company}"):
-                                st.session_state.pop(f"confirm_delete_company_{company}", None)
-                                st.rerun()
+                        if st.session_state.get(f"confirm_delete_company_{company}"):
+                            st.warning(
+                                f"Are you sure you want to delete **{len(all_names)} indexes** "
+                                f"for {company.upper()} ({total_chunks} chunks)? This cannot be undone."
+                            )
+                            col_yes, col_no = st.columns(2)
+                            with col_yes:
+                                if st.button("Confirm all", key=f"yes_company_{company}", type="primary"):
+                                    from services.hybrid_service import delete_index
+                                    errors = []
+                                    for n in all_names:
+                                        r = delete_index(n)
+                                        if r.get("status") != "success":
+                                            errors.append(n)
+                                    if not errors:
+                                        st.success(f"All indexes for {company.upper()} deleted.")
+                                    else:
+                                        st.error(f"Failed to delete: {', '.join(errors)}")
+                                    st.session_state.pop(f"confirm_delete_company_{company}", None)
+                                    _refresh()
+                            with col_no:
+                                if st.button("Cancel", key=f"no_company_{company}"):
+                                    st.session_state.pop(f"confirm_delete_company_{company}", None)
+                                    st.rerun()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -206,6 +216,13 @@ with tab_tree:
 
         st.divider()
 
+        # ── Theme-adaptive text color ────────────────────────────────────
+        try:
+            _theme = st.context.theme.base  # runtime theme (Streamlit 1.39+)
+        except AttributeError:
+            _theme = st.get_option("theme.base") or "light"
+        _text_color = "#FFFFFF" if _theme == "dark" else "#1A1A1A"
+
         # ── Build sunburst data ──────────────────────────────────────────
         sb_ids: list[str] = []
         sb_labels: list[str] = []
@@ -216,7 +233,7 @@ with tab_tree:
 
         # Distinct palette — each company gets a clearly different color
         _PALETTE = [
-            "#006A4E",  # Lacoste green
+            "#4285F4",  # Blue (primary)
             "#2563EB",  # Blue
             "#D97706",  # Amber
             "#9333EA",  # Purple
@@ -242,11 +259,11 @@ with tab_tree:
             is_cc = any(kw in company.lower() for kw in _CUSTOMER_CARE_KEYWORDS)
             if is_cc:
                 display_label = "Customer Care"
-                color = "#006A4E"  # Lacoste green — always
+                color = "#4285F4"  # enhance primary blue
             else:
                 region_num += 1
                 display_label = f"Region {region_num}"
-                # Skip green (#006A4E) in palette for non-CC companies
+                # Skip primary color in palette for non-CC companies
                 color = _PALETTE[region_num % len(_PALETTE)]
 
             for idx in sorted(idxs, key=lambda x: x.get("index_name", "")):
@@ -290,7 +307,7 @@ with tab_tree:
         sb_labels.append("Knowledge Base")
         sb_parents.append("")
         sb_values.append(max(grand_total_files, 1))
-        sb_colors.append("#F5FAF7")
+        sb_colors.append("#EBF3FD")
         sb_hover.append(
             f"<b>Knowledge Base</b><br>"
             f"{len(grouped)} regions · {len(all_indexes)} topics<br>"
@@ -320,7 +337,7 @@ with tab_tree:
             font=dict(
                 family="-apple-system, BlinkMacSystemFont, sans-serif",
                 size=11,
-                color="#1A1A1A",
+                color=_text_color,
             ),
         )
 
@@ -363,7 +380,7 @@ with tab_tree:
         # Root at center
         net_nodes.append(dict(
             id="root", label="Knowledge\nBase", x=0, y=0,
-            size=40, color="#006A4E",
+            size=40, color="#4285F4",
             hover=(
                 f"<b>Knowledge Base</b><br>"
                 f"{len(grouped)} regions · {len(all_indexes)} topics<br>"
@@ -385,7 +402,7 @@ with tab_tree:
 
             is_cc = any(kw in company.lower() for kw in _CUSTOMER_CARE_KEYWORDS)
             if is_cc:
-                color = "#006A4E"
+                color = "#4285F4"
                 c_label = "Customer\nCare"
             else:
                 net_region_num += 1
@@ -468,7 +485,7 @@ with tab_tree:
             ),
             text=[n["label"] for n in net_nodes],
             textposition="bottom center",
-            textfont=dict(size=10, color="#1A1A1A"),
+            textfont=dict(size=10, color=_text_color),
             hovertext=[n["hover"] for n in net_nodes],
             hoverinfo="text",
         ))
@@ -481,13 +498,24 @@ with tab_tree:
             plot_bgcolor="rgba(0,0,0,0)",
             xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, visible=False),
             yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, visible=False, scaleanchor="x"),
-            font=dict(family="-apple-system, BlinkMacSystemFont, sans-serif"),
+            font=dict(family="-apple-system, BlinkMacSystemFont, sans-serif", color=_text_color),
         )
+        # Force text color — no selector, applies to all traces including scatter nodes
+        fig_net.update_traces(textfont_color=_text_color)
 
         # ── Display charts ───────────────────────────────────────────────
+        # CSS: force scatter text labels to follow Streamlit's theme text color
+        st.markdown("""
+        <style>
+        .js-plotly-plot svg text {
+            fill: var(--text-color) !important;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+
         chart_tab1, chart_tab2, chart_tab3 = st.tabs(["Network", "Sunburst", "Treemap"])
         with chart_tab1:
-            st.plotly_chart(fig_net, use_container_width=True, key="network")
+            st.plotly_chart(fig_net, use_container_width=True, key="network", theme=None)
         with chart_tab2:
             st.plotly_chart(fig_sun, use_container_width=True, key="sunburst")
         with chart_tab3:
@@ -514,9 +542,9 @@ with tab_tree:
                     files = idx.get("total_files", 0)
 
                     st.markdown(
-                        f"<div style='border-left:3px solid #006A4E;padding:8px 12px;"
-                        f"margin:8px 0;background:#F5FAF7;border-radius:0 6px 6px 0'>"
-                        f"<strong style='color:#006A4E;font-size:1.05em'>"
+                        f"<div style='border-left:3px solid #4285F4;padding:8px 12px;"
+                        f"margin:8px 0;background:#EBF3FD;border-radius:0 6px 6px 0'>"
+                        f"<strong style='color:#4285F4;font-size:1.05em'>"
                         f"{notion.upper().replace('_', ' ')}</strong>"
                         f"<span style='color:#666;font-size:0.85em;margin-left:12px'>"
                         f"{files} documents · {chunks} segments</span>"
@@ -564,58 +592,60 @@ with tab_tree:
 
 with tab_create:
     st.subheader("Create a New Index")
+    if not is_admin:
+        st.warning("Cette section est réservée aux administrateurs.")
+    else:
+        with st.form("form_create_index"):
+            col_company, col_notion = st.columns(2)
+            with col_company:
+                new_company = st.text_input(
+                    "Client",
+                    placeholder="acme",
+                    help="Client or company name.",
+                )
+            with col_notion:
+                new_notion = st.text_input(
+                    "Topic",
+                    placeholder="hr",
+                    help="Knowledge domain: hr, sales, legal, support...",
+                )
 
-    with st.form("form_create_index"):
-        col_company, col_notion = st.columns(2)
-        with col_company:
-            new_company = st.text_input(
-                "Client",
-                placeholder="acme",
-                help="Client or company name.",
+            preview_name = ""
+            if new_company.strip() and new_notion.strip():
+                preview_name = f"{new_company.strip().lower()}{INDEX_SEP}{new_notion.strip().lower()}"
+
+            if preview_name:
+                st.info(f"Index name: **`{preview_name}`**")
+
+            new_strategy = st.selectbox(
+                "Chunking strategy",
+                BENCHMARK_CHUNK_STRATEGIES,
+                help="fixed = fixed size, semantic = content-aware boundaries, hierarchical = parent+child",
             )
-        with col_notion:
-            new_notion = st.text_input(
-                "Topic",
-                placeholder="hr",
-                help="Knowledge domain: hr, sales, legal, support...",
-            )
+            submitted = st.form_submit_button("Create Index", type="primary",
+                                              use_container_width=True)
 
-        preview_name = ""
-        if new_company.strip() and new_notion.strip():
-            preview_name = f"{new_company.strip().lower()}{INDEX_SEP}{new_notion.strip().lower()}"
-
-        if preview_name:
-            st.info(f"Index name: **`{preview_name}`**")
-
-        new_strategy = st.selectbox(
-            "Chunking strategy",
-            BENCHMARK_CHUNK_STRATEGIES,
-            help="fixed = fixed size, semantic = content-aware boundaries, hierarchical = parent+child",
-        )
-        submitted = st.form_submit_button("Create Index", type="primary",
-                                          use_container_width=True)
-
-    if submitted:
-        if not new_company.strip() or not new_notion.strip():
-            st.error("Both Client and Topic fields are required.")
-        else:
-            index_name = f"{new_company.strip().lower()}{INDEX_SEP}{new_notion.strip().lower()}"
-            with st.spinner(f"Creating index `{index_name}`..."):
-                from services.hybrid_service import create_index
-                result = create_index(index_name, "", new_strategy)
-            if result.get("status") == "success":
-                st.success(result.get("message", f"Index `{index_name}` created."))
-                _refresh()
+        if submitted:
+            if not new_company.strip() or not new_notion.strip():
+                st.error("Both Client and Topic fields are required.")
             else:
-                st.error(result.get("message", "Failed to create the index."))
+                index_name = f"{new_company.strip().lower()}{INDEX_SEP}{new_notion.strip().lower()}"
+                with st.spinner(f"Creating index `{index_name}`..."):
+                    from services.hybrid_service import create_index
+                    result = create_index(index_name, "", new_strategy)
+                if result.get("status") == "success":
+                    st.success(result.get("message", f"Index `{index_name}` created."))
+                    _refresh()
+                else:
+                    st.error(result.get("message", "Failed to create the index."))
 
-    st.divider()
-    st.markdown("""
-    **Good to know**
-    - Index names follow the **`client__topic`** convention (e.g. `acme__hr`).
-    - All documents in an index share the same embedding model.
-    - To change the model, delete the index and recreate it.
-    """)
+        st.divider()
+        st.markdown("""
+        **Good to know**
+        - Index names follow the **`client__topic`** convention (e.g. `acme__hr`).
+        - All documents in an index share the same embedding model.
+        - To change the model, delete the index and recreate it.
+        """)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -624,190 +654,192 @@ with tab_create:
 
 with tab_ingest:
     st.subheader("Import Documents from Google Drive")
+    if not is_admin:
+        st.warning("Cette section est réservée aux administrateurs.")
+    else:
+        mode_auto, mode_manual = st.tabs(["Automatic Import", "Manual Import"])
 
-    mode_auto, mode_manual = st.tabs(["Automatic Import", "Manual Import"])
-
-    # ── Auto ingestion ────────────────────────────────────────────────────────
-    with mode_auto:
-        st.markdown(
-            "Scans your Google Drive folder structure and automatically creates one index "
-            "per **client / topic** pair. Previously imported files are skipped."
-        )
-
-        with st.form("form_ingest_auto"):
-            company_filter_input = st.text_input(
-                "Filter by client (optional)",
-                placeholder="acme, globex",
-                help="Leave empty to import everything. Separate with commas to filter.",
-            )
-            col_strat, col_max = st.columns(2)
-            with col_strat:
-                auto_strategy = st.selectbox(
-                    "Chunking strategy",
-                    BENCHMARK_CHUNK_STRATEGIES,
-                    key="auto_strategy",
-                )
-            with col_max:
-                auto_max_files = st.number_input(
-                    "Max files per index (0 = unlimited)",
-                    min_value=0, value=0, step=10,
-                    help="Useful for large volumes. Re-run to continue where you left off.",
-                    key="auto_max_files",
-                )
-
-            auto_submitted = st.form_submit_button(
-                "Start Automatic Import",
-                type="primary",
-                use_container_width=True,
+        # ── Auto ingestion ────────────────────────────────────────────────────
+        with mode_auto:
+            st.markdown(
+                "Scans your Google Drive folder structure and automatically creates one index "
+                "per **client / topic** pair. Previously imported files are skipped."
             )
 
-        if auto_submitted:
-            company_filter = [
-                c.strip().lower()
-                for c in company_filter_input.split(",")
-                if c.strip()
-            ] or None
-
-            label = (
-                f"client(s): {', '.join(company_filter)}"
-                if company_filter
-                else "all clients"
-            )
-            with st.spinner(
-                f"Importing documents ({label})... This may take a few minutes."
-            ):
-                from services.hybrid_service import add_data_auto
-                result = add_data_auto(
-                    company_filter=company_filter,
-                    chunk_strategy=auto_strategy,
-                    max_files_per_index=int(auto_max_files),
+            with st.form("form_ingest_auto"):
+                company_filter_input = st.text_input(
+                    "Filter by client (optional)",
+                    placeholder="acme, globex",
+                    help="Leave empty to import everything. Separate with commas to filter.",
                 )
-
-            if result.get("status") == "success":
-                st.success(result.get("message", "Import complete."))
-
-                per_index = result.get("indexes", [])
-                if per_index:
-                    st.markdown("**Results by index:**")
-                    for idx_r in per_index:
-                        name = idx_r.get("index_name", "?")
-                        processed = idx_r.get("files_processed", 0)
-                        skipped = idx_r.get("files_already_indexed", 0)
-                        updated = idx_r.get("files_updated", 0)
-                        chunks = idx_r.get("chunks_created", 0)
-                        status_icon = "✅" if idx_r.get("status") == "success" else "❌"
-                        st.markdown(
-                            f"- {status_icon} **`{name}`** — "
-                            f"{processed} processed, {skipped} skipped, "
-                            f"{updated} updated, {chunks} chunks"
-                        )
-
-                st.json(result, expanded=False)
-                _refresh()
-            else:
-                st.error(result.get("message", "Import failed."))
-                st.json(result, expanded=False)
-
-    # ── Manual ingestion ──────────────────────────────────────────────────────
-    with mode_manual:
-        st.markdown(
-            "Pick a target index and specify which Google Drive folders to import."
-        )
-
-        indexes = _load_indexes()
-        index_names = [i["index_name"] for i in indexes]
-
-        if not index_names:
-            st.warning("No indexes available. Create one first or use the automatic import.")
-        else:
-            with st.form("form_ingest_manual"):
-                target_index = st.selectbox("Target index", index_names)
-
-                folder_input = st.text_area(
-                    "Drive folders (one per line)",
-                    placeholder="HR\nSales",
-                    help="Names of Google Drive folders to import. Subfolders are included automatically.",
-                )
-
-                col_strategy, col_max = st.columns(2)
-                with col_strategy:
-                    ingest_strategy = st.selectbox(
+                col_strat, col_max = st.columns(2)
+                with col_strat:
+                    auto_strategy = st.selectbox(
                         "Chunking strategy",
                         BENCHMARK_CHUNK_STRATEGIES,
-                        key="manual_strategy",
+                        key="auto_strategy",
                     )
                 with col_max:
-                    max_files = st.number_input(
-                        "File limit (0 = unlimited)",
+                    auto_max_files = st.number_input(
+                        "Max files per index (0 = unlimited)",
                         min_value=0, value=0, step=10,
-                        key="manual_max_files",
+                        help="Useful for large volumes. Re-run to continue where you left off.",
+                        key="auto_max_files",
                     )
 
-                ingest_submitted = st.form_submit_button(
-                    "Start Import", type="primary", use_container_width=True
+                auto_submitted = st.form_submit_button(
+                    "Start Automatic Import",
+                    type="primary",
+                    use_container_width=True,
                 )
 
-            if ingest_submitted:
-                folder_names = [f.strip() for f in folder_input.splitlines() if f.strip()]
-                if not folder_names:
-                    st.error("Please enter at least one Drive folder name.")
+            if auto_submitted:
+                company_filter = [
+                    c.strip().lower()
+                    for c in company_filter_input.split(",")
+                    if c.strip()
+                ] or None
+
+                label = (
+                    f"client(s): {', '.join(company_filter)}"
+                    if company_filter
+                    else "all clients"
+                )
+                with st.spinner(
+                    f"Importing documents ({label})... This may take a few minutes."
+                ):
+                    from services.hybrid_service import add_data_auto
+                    result = add_data_auto(
+                        company_filter=company_filter,
+                        chunk_strategy=auto_strategy,
+                        max_files_per_index=int(auto_max_files),
+                    )
+
+                if result.get("status") == "success":
+                    st.success(result.get("message", "Import complete."))
+
+                    per_index = result.get("indexes", [])
+                    if per_index:
+                        st.markdown("**Results by index:**")
+                        for idx_r in per_index:
+                            name = idx_r.get("index_name", "?")
+                            processed = idx_r.get("files_processed", 0)
+                            skipped = idx_r.get("files_already_indexed", 0)
+                            updated = idx_r.get("files_updated", 0)
+                            chunks = idx_r.get("chunks_created", 0)
+                            status_icon = "✅" if idx_r.get("status") == "success" else "❌"
+                            st.markdown(
+                                f"- {status_icon} **`{name}`** — "
+                                f"{processed} processed, {skipped} skipped, "
+                                f"{updated} updated, {chunks} chunks"
+                            )
+
+                    st.json(result, expanded=False)
+                    _refresh()
                 else:
-                    with st.spinner(
-                        f"Importing {len(folder_names)} folder(s) into `{target_index}`... "
-                        "This may take a few minutes."
-                    ):
-                        from services.hybrid_service import add_data
-                        result = add_data(
-                            index_name=target_index,
-                            folder_names=folder_names,
-                            chunk_strategy=ingest_strategy,
-                            max_files=int(max_files),
-                        )
+                    st.error(result.get("message", "Import failed."))
+                    st.json(result, expanded=False)
 
-                    if result.get("status") == "success":
-                        st.success(
-                            f"{result.get('files_processed', '?')} file(s) processed — "
-                            f"{result.get('chunks_created', '?')} chunks created."
-                        )
-                        st.json(result, expanded=False)
-                        _refresh()
-                    else:
-                        st.error(result.get("message", "Import failed."))
-                        st.json(result, expanded=False)
+        # ── Manual ingestion ──────────────────────────────────────────────────
+        with mode_manual:
+            st.markdown(
+                "Pick a target index and specify which Google Drive folders to import."
+            )
 
-    st.divider()
+            indexes = _load_indexes()
+            index_names = [i["index_name"] for i in indexes]
 
-    # Drive folder browser
-    st.subheader("Browse Google Drive")
-    drive_folder = st.text_input("Drive folder name", placeholder="RAG")
-    if st.button("List contents", use_container_width=False):
-        if drive_folder:
-            with st.spinner(f"Listing `{drive_folder}`..."):
-                from services.hybrid_service import list_drive_folder
-                drive_result = list_drive_folder(drive_folder)
-
-            if drive_result.get("status") == "success":
-                folders = drive_result.get("folders", [])
-                files = drive_result.get("files", [])
-                st.success(f"{len(folders)} subfolder(s) · {len(files)} file(s)")
-                if folders:
-                    st.markdown("**Subfolders**")
-                    for f in folders:
-                        st.caption(f"{f.get('name', '?')}")
-                if files:
-                    st.markdown("**Files**")
-                    for f in files:
-                        name = f.get("name", "?")
-                        url = f.get("webViewLink", "")
-                        ftype = f.get("mimeType", "").split(".")[-1]
-                        if url:
-                            st.caption(f"[{name}]({url})  `{ftype}`")
-                        else:
-                            st.caption(f"{name}  `{ftype}`")
+            if not index_names:
+                st.warning("No indexes available. Create one first or use the automatic import.")
             else:
-                st.error(drive_result.get("message", "Error"))
-        else:
-            st.warning("Please enter a folder name.")
+                with st.form("form_ingest_manual"):
+                    target_index = st.selectbox("Target index", index_names)
+
+                    folder_input = st.text_area(
+                        "Drive folders (one per line)",
+                        placeholder="HR\nSales",
+                        help="Names of Google Drive folders to import. Subfolders are included automatically.",
+                    )
+
+                    col_strategy, col_max = st.columns(2)
+                    with col_strategy:
+                        ingest_strategy = st.selectbox(
+                            "Chunking strategy",
+                            BENCHMARK_CHUNK_STRATEGIES,
+                            key="manual_strategy",
+                        )
+                    with col_max:
+                        max_files = st.number_input(
+                            "File limit (0 = unlimited)",
+                            min_value=0, value=0, step=10,
+                            key="manual_max_files",
+                        )
+
+                    ingest_submitted = st.form_submit_button(
+                        "Start Import", type="primary", use_container_width=True
+                    )
+
+                if ingest_submitted:
+                    folder_names = [f.strip() for f in folder_input.splitlines() if f.strip()]
+                    if not folder_names:
+                        st.error("Please enter at least one Drive folder name.")
+                    else:
+                        with st.spinner(
+                            f"Importing {len(folder_names)} folder(s) into `{target_index}`... "
+                            "This may take a few minutes."
+                        ):
+                            from services.hybrid_service import add_data
+                            result = add_data(
+                                index_name=target_index,
+                                folder_names=folder_names,
+                                chunk_strategy=ingest_strategy,
+                                max_files=int(max_files),
+                            )
+
+                        if result.get("status") == "success":
+                            st.success(
+                                f"{result.get('files_processed', '?')} file(s) processed — "
+                                f"{result.get('chunks_created', '?')} chunks created."
+                            )
+                            st.json(result, expanded=False)
+                            _refresh()
+                        else:
+                            st.error(result.get("message", "Import failed."))
+                            st.json(result, expanded=False)
+
+        st.divider()
+
+        # Drive folder browser
+        st.subheader("Browse Google Drive")
+        drive_folder = st.text_input("Drive folder name", placeholder="RAG")
+        if st.button("List contents", use_container_width=False):
+            if drive_folder:
+                with st.spinner(f"Listing `{drive_folder}`..."):
+                    from services.hybrid_service import list_drive_folder
+                    drive_result = list_drive_folder(drive_folder)
+
+                if drive_result.get("status") == "success":
+                    folders = drive_result.get("folders", [])
+                    files = drive_result.get("files", [])
+                    st.success(f"{len(folders)} subfolder(s) · {len(files)} file(s)")
+                    if folders:
+                        st.markdown("**Subfolders**")
+                        for f in folders:
+                            st.caption(f"{f.get('name', '?')}")
+                    if files:
+                        st.markdown("**Files**")
+                        for f in files:
+                            name = f.get("name", "?")
+                            url = f.get("webViewLink", "")
+                            ftype = f.get("mimeType", "").split(".")[-1]
+                            if url:
+                                st.caption(f"[{name}]({url})  `{ftype}`")
+                            else:
+                                st.caption(f"{name}  `{ftype}`")
+                else:
+                    st.error(drive_result.get("message", "Error"))
+            else:
+                st.warning("Please enter a folder name.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

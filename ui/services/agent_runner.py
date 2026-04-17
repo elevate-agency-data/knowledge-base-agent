@@ -2,12 +2,10 @@
 ADK Agent Runner — wraps google.adk.runners.Runner pour Streamlit.
 
 Persistence :
-  - Sessions ADK  : même SQLite que `adk web` → rag_agent/.adk/session.db
-                    app_name="rag_agent" pour partager les sessions entre
-                    les deux interfaces.
-  - Affichage     : fichiers JSON sidecar (ui/data/agent_display/{session_id}.json)
-                    Stockent le format enrichi {role, text, tool_events} pour le
-                    rendu Streamlit sans avoir à re-parser les events ADK bruts.
+  - Sessions ADK     : même SQLite qu'`adk web` → rag_agent/.adk/session.db
+                       app_name="rag_agent" pour partager les sessions.
+  - Messages display : table agent_messages dans chat.duckdb (via chat_store)
+                       remplace les anciens fichiers JSON sidecar.
 
 Async → sync via thread dédié (compatible avec la boucle Tornado de Streamlit).
 """
@@ -15,15 +13,13 @@ Async → sync via thread dédié (compatible avec la boucle Tornado de Streamli
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 from pathlib import Path
 from typing import Any
 
-_APP_NAME    = "rag_agent"
-_DISPLAY_DIR = Path(__file__).parent.parent / "data" / "agent_display"
+_APP_NAME = "rag_agent"
 # Même SQLite qu'`adk web` — partagé entre les deux interfaces
-_DB_PATH     = Path(__file__).parent.parent.parent / "rag_agent" / ".adk" / "session.db"
+_DB_PATH  = Path(__file__).parent.parent.parent / "rag_agent" / ".adk" / "session.db"
 
 
 # ── Async helper ──────────────────────────────────────────────────────────────
@@ -50,44 +46,19 @@ def _run_coroutine(coro) -> Any:
     return result[0]
 
 
-# ── Sidecar display store ─────────────────────────────────────────────────────
-
-def _display_path(session_id: str) -> Path:
-    _DISPLAY_DIR.mkdir(parents=True, exist_ok=True)
-    return _DISPLAY_DIR / f"{session_id}.json"
-
-
-def load_display(session_id: str) -> list[dict]:
-    p = _display_path(session_id)
-    if not p.exists():
-        return []
-    try:
-        with open(p, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
-
-
-def append_display(session_id: str, msg: dict) -> None:
-    msgs = load_display(session_id)
-    msgs.append(msg)
-    with open(_display_path(session_id), "w", encoding="utf-8") as f:
-        json.dump(msgs, f, ensure_ascii=False, indent=2, default=str)
-
-
 # ── AgentRunner ───────────────────────────────────────────────────────────────
 
 class AgentRunner:
     """
-    Synchronous wrapper autour de google.adk.runners.Runner.
+    Wrapper synchrone autour de google.adk.runners.Runner.
     Utilise DatabaseSessionService pour que les sessions persistent
     comme avec `adk web`.
     Destiné à être caché via @st.cache_resource.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, is_admin: bool = False) -> None:
         from google.adk.runners import Runner
-        from rag_agent.agent import root_agent
+        from rag_agent.agent import root_agent, user_agent
 
         _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -100,8 +71,9 @@ class AgentRunner:
             from google.adk.sessions import InMemorySessionService
             self._session_service = InMemorySessionService()
 
+        agent = root_agent if is_admin else user_agent
         self._runner = Runner(
-            agent=root_agent,
+            agent=agent,
             app_name=_APP_NAME,
             session_service=self._session_service,
         )
@@ -111,10 +83,12 @@ class AgentRunner:
     def list_sessions(self, user_id: str) -> list[dict]:
         """
         Liste toutes les sessions ADK persistées pour cet utilisateur.
+        Enrichit avec le nom et le compte de messages depuis chat_store.
 
-        Returns list of dicts:
-          {id, name, message_count, has_display}
+        Returns list of dicts : {id, name, message_count}
         """
+        from services.chat_store import agent_sessions_meta
+
         async def _list():
             resp = await self._session_service.list_sessions(
                 app_name=_APP_NAME,
@@ -127,25 +101,18 @@ class AgentRunner:
         except Exception:
             return []
 
+        meta = agent_sessions_meta(user_id)
+
         result = []
         for s in adk_sessions:
-            sid          = s.id
-            display_msgs = load_display(sid)
-            msg_count    = len(display_msgs)
-
-            # Name = first user message (truncated) or session id
-            name = next(
-                (m["text"][:45] + "…" if len(m["text"]) > 45 else m["text"]
-                 for m in display_msgs if m.get("role") == "user"),
-                f"Session {sid[:8]}",
-            )
+            sid  = s.id
+            info = meta.get(sid, {})
             result.append({
                 "id":            sid,
-                "name":          name,
-                "message_count": msg_count,
+                "name":          info.get("name", f"Session {sid[:8]}"),
+                "message_count": info.get("message_count", 0),
             })
 
-        # Most recent first (ADK returns them in creation order)
         return list(reversed(result))
 
     def create_session(self, user_id: str) -> str:
@@ -189,7 +156,10 @@ class AgentRunner:
     def _parse_events(raw_events) -> list[dict]:
         parsed: list[dict] = []
         for event in raw_events:
-            fn_calls = (event.get_function_calls() if hasattr(event, "get_function_calls") else []) or []
+            fn_calls = (
+                event.get_function_calls()
+                if hasattr(event, "get_function_calls") else []
+            ) or []
             for fn in fn_calls:
                 parsed.append({
                     "type": "tool_call",
@@ -197,15 +167,22 @@ class AgentRunner:
                     "args": dict(fn.args) if fn.args else {},
                 })
 
-            fn_resps = (event.get_function_responses() if hasattr(event, "get_function_responses") else []) or []
+            fn_resps = (
+                event.get_function_responses()
+                if hasattr(event, "get_function_responses") else []
+            ) or []
             for fn in fn_resps:
                 parsed.append({
                     "type":     "tool_resp",
                     "name":     fn.name,
-                    "response": fn.response if isinstance(fn.response, dict) else {"raw": str(fn.response)},
+                    "response": fn.response
+                        if isinstance(fn.response, dict) else {"raw": str(fn.response)},
                 })
 
-            is_final = (event.is_final_response() if hasattr(event, "is_final_response") else False)
+            is_final = (
+                event.is_final_response()
+                if hasattr(event, "is_final_response") else False
+            )
             if event.content and event.content.parts:
                 for part in event.content.parts:
                     text = getattr(part, "text", None)
@@ -217,5 +194,8 @@ class AgentRunner:
 
     @staticmethod
     def extract_final_text(parsed_events: list[dict]) -> str:
-        texts = [e["text"] for e in parsed_events if e["type"] == "text" and e.get("final")]
+        texts = [
+            e["text"] for e in parsed_events
+            if e["type"] == "text" and e.get("final")
+        ]
         return texts[-1] if texts else ""

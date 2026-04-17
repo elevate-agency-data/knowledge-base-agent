@@ -37,6 +37,10 @@ st.set_page_config(
     layout="wide",
 )
 
+from auth import require_admin
+from components.sidebar_auth import render_sidebar_nav, render_sidebar_user_info
+require_admin()
+
 # ── Cached loaders ────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -141,6 +145,8 @@ _init_cmp_state()
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
+    render_sidebar_nav()
+    st.divider()
     st.header("RAG Comparison")
     st.divider()
 
@@ -219,6 +225,8 @@ with st.sidebar:
         _load_indexes.clear()
         _refresh_sessions_list()
         st.rerun()
+
+    render_sidebar_user_info()
 
 
 # ── Page header ───────────────────────────────────────────────────────────────

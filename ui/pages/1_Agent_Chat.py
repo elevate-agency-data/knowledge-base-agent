@@ -2,17 +2,15 @@
 Page 1 — Agent Chat
 
 Sessions ADK persistées via DatabaseSessionService (SQLite).
-Les sessions survivent aux redémarrages Streamlit et sont partagées
-avec `adk web` (même base de données).
-
-Affichage enrichi stocké dans des fichiers sidecar JSON séparés
-(ui/data/agent_display/{session_id}.json) — séparé des sessions
-de RAG Comparison (ui/data/comparison_sessions/).
+Messages d'affichage persistés dans chat.duckdb (table agent_messages).
+Accès réservé aux utilisateurs authentifiés.
 """
 
 import path_setup  # noqa: F401
 import streamlit as st
-from config import APP_TITLE, ADK_USER_ID
+from config import APP_TITLE
+from auth import require_auth
+from components.sidebar_auth import render_sidebar_nav, render_sidebar_user_info
 
 st.set_page_config(
     page_title=f"Agent Chat — {APP_TITLE}",
@@ -20,42 +18,48 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── Cached runner ─────────────────────────────────────────────────────────────
+# ── Auth guard ────────────────────────────────────────────────────────────────
+
+user     = require_auth()
+USER_ID  = user["id"]
+IS_ADMIN = user["is_admin"]
+
+# ── Cached runner (one per role — admin gets write tools, users get read-only) ─
 
 @st.cache_resource(show_spinner="Loading AI agent...")
-def get_runner():
+def get_runner(is_admin: bool):
     from services.agent_runner import AgentRunner
-    return AgentRunner()
+    return AgentRunner(is_admin=is_admin)
 
 
 # ── Session state (namespace : "agent_*") ─────────────────────────────────────
 
 def _init():
     if "agent_active_session_id" not in st.session_state:
-        runner = get_runner()
+        runner = get_runner(IS_ADMIN)
         try:
-            sessions = runner.list_sessions(ADK_USER_ID)
+            sessions = runner.list_sessions(USER_ID)
         except Exception:
             sessions = []
         if sessions:
             st.session_state.agent_active_session_id = sessions[0]["id"]
         else:
-            st.session_state.agent_active_session_id = runner.create_session(ADK_USER_ID)
+            st.session_state.agent_active_session_id = runner.create_session(USER_ID)
     if "agent_sessions_cache" not in st.session_state:
         _refresh_sessions()
 
 
 def _refresh_sessions():
-    runner = get_runner()
+    runner = get_runner(IS_ADMIN)
     try:
-        st.session_state.agent_sessions_cache = runner.list_sessions(ADK_USER_ID)
+        st.session_state.agent_sessions_cache = runner.list_sessions(USER_ID)
     except Exception:
         st.session_state.agent_sessions_cache = []
 
 
 def _new_session():
-    runner = get_runner()
-    sid    = runner.create_session(ADK_USER_ID)
+    runner = get_runner(IS_ADMIN)
+    sid    = runner.create_session(USER_ID)
     st.session_state.agent_active_session_id = sid
     _refresh_sessions()
 
@@ -65,9 +69,8 @@ def _active_sid() -> str:
 
 
 def _active_display() -> list[dict]:
-    """Load display messages for the active session from sidecar file."""
-    from services.agent_runner import load_display
-    return load_display(_active_sid())
+    from services.chat_store import agent_load_messages
+    return agent_load_messages(USER_ID, _active_sid())
 
 
 _init()
@@ -75,6 +78,8 @@ _init()
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 with st.sidebar:
+    render_sidebar_nav()
+    st.divider()
     st.header("Agent Chat")
     st.caption("Powered by **Gemini 2.5 Pro**")
     st.divider()
@@ -86,11 +91,12 @@ with st.sidebar:
     st.divider()
     st.markdown("**Sessions**")
 
-    sessions = st.session_state.get("agent_sessions_cache", [])
+    sessions   = st.session_state.get("agent_sessions_cache", [])
     active_sid = _active_sid()
 
     if not sessions:
         st.caption("_No sessions found_")
+        st.caption("_Aucune session_")
 
     for meta in sessions:
         sid       = meta["id"]
@@ -113,24 +119,25 @@ with st.sidebar:
             st.caption(str(n_msg))
 
     st.divider()
-    st.markdown("**Quick actions**")
-    st.code("list all indexes")
-    st.code("create an index [name]")
-    st.code("add folder [X] to index [Y]")
-    st.code("Find documents similar to: https://drive.google.com/file/d/1q1d5AHjEgKfhOz3mkusT7azTLENStcn5/view?usp=sharing")
-    st.code("compare [Index A] and [Index B]")
-
-    st.divider()
     if st.button("Refresh list", use_container_width=True):
         _refresh_sessions()
         st.rerun()
 
     st.caption(f"ADK session: `{active_sid[:16]}…`")
+    st.divider()
+    st.markdown("**Quick actions**")
+    st.code("list all indexes")
+    st.code("search [topic] about [question]")
+    if IS_ADMIN:
+        st.code("create an index [name]")
+        st.code("add folder [X] to index [Y]")
+        st.code("delete index [name]")
+
+    render_sidebar_user_info()
 
 
 # ── Page title ────────────────────────────────────────────────────────────────
 
-# Name = first user message or default
 sessions     = st.session_state.get("agent_sessions_cache", [])
 active_meta  = next((s for s in sessions if s["id"] == _active_sid()), None)
 session_name = active_meta["name"] if active_meta else "New conversation"
@@ -162,17 +169,17 @@ for msg in _active_display():
 user_input = st.chat_input("Ask a question or give an instruction...")
 
 if user_input:
-    from services.agent_runner import append_display
+    from services.chat_store import agent_append_message
 
     sid = _active_sid()
     render_user_message(user_input)
-    append_display(sid, {"role": "user", "text": user_input})
+    agent_append_message(USER_ID, sid, {"role": "user", "text": user_input})
 
     with st.spinner("Thinking..."):
         try:
-            runner  = get_runner()
+            runner  = get_runner(IS_ADMIN)
             parsed  = runner.run(
-                user_id=ADK_USER_ID,
+                user_id=USER_ID,
                 session_id=sid,
                 message=user_input,
             )
@@ -180,7 +187,7 @@ if user_input:
             tool_events = [e for e in parsed if e["type"] in ("tool_call", "tool_resp")]
 
             render_assistant_message(text=final_text, tool_events=tool_events)
-            append_display(sid, {
+            agent_append_message(USER_ID, sid, {
                 "role":        "assistant",
                 "text":        final_text,
                 "tool_events": tool_events,
@@ -189,8 +196,7 @@ if user_input:
         except Exception as exc:
             error_msg = str(exc)
             render_error_message(error_msg)
-            append_display(sid, {"role": "error", "text": error_msg})
+            agent_append_message(USER_ID, sid, {"role": "error", "text": error_msg})
 
-    # Refresh session list so name updates after first message
     _refresh_sessions()
     st.rerun()

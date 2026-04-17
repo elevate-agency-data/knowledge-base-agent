@@ -34,6 +34,13 @@ st.set_page_config(
     layout="wide",
 )
 
+from auth import require_auth
+from components.sidebar_auth import render_sidebar_user
+require_auth()
+
+with st.sidebar:
+    render_sidebar_user()
+
 RESULTS_PATH = os.path.join(
     os.path.dirname(__file__), "..", "..", "hybrid", "data", "benchmark_results.json"
 )

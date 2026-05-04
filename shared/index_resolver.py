@@ -4,13 +4,13 @@ Shared utility: resolve which hybrid indexes to query for a given prompt.
 Uses Gemini Flash to select thematically relevant indexes for a given query.
 Falls back to substring matching, then to all indexes if nothing is found.
 
-Understands the hierarchical naming convention ``company__notion``:
-  - If the user mentions a company name, all its sub-indexes are included.
-  - If the user mentions a specific notion, only matching sub-indexes are returned.
+Understands the hierarchical naming convention ``commune__category``:
+  - If the user mentions a commune name, all its sub-indexes are included.
+  - If the user mentions a specific category, only matching sub-indexes are returned.
 
 Used by:
   - hybrid/tools/hybrid_query.py   (ADK tool — auto-resolution when index_names=[])
-  - ui/services/hybrid_service.py  (UI services — Simple Chat, RAG Comparison)
+  - ui/services/hybrid_service.py  (UI services — Simple Chat)
 """
 
 from __future__ import annotations
@@ -112,40 +112,39 @@ def resolve_indexes(query: str, available: list[str]) -> list[str]:
         return available
 
     # Build a human-readable description of the hierarchy for the LLM
-    companies = _describe_hierarchy(available)
+    communes = _describe_hierarchy(available)
     hierarchy_hint = (
-        "Indexes follow the company__topic naming convention.\n"
-        f"Hierarchy:\n{companies}\n\n"
-        "You can respond with a company name alone (e.g. 'acme') to "
-        "select all its sub-indexes, or a specific index (e.g. 'acme__hr').\n\n"
+        "Indexes follow the commune__category naming convention.\n"
+        f"Hierarchy:\n{communes}\n\n"
+        "You can respond with a commune name alone (e.g. 'paris') to "
+        "select all its sub-indexes, or a specific index (e.g. 'paris__finances').\n\n"
     )
 
-    # Extract company names for the prompt
-    company_names = sorted({
+    # Extract commune names for the prompt
+    commune_names = sorted({
         name.split(INDEX_SEP, 1)[0] for name in available if INDEX_SEP in name
     })
 
     prompt = (
         f"Available indexes: {', '.join(available)}\n"
         f"{hierarchy_hint}"
-        f"Known companies: {', '.join(company_names)}\n\n"
+        f"Known communes: {', '.join(commune_names)}\n\n"
         f"Query: \"{query}\"\n\n"
-        "Context: this is a customer care knowledge base. Advisors ask questions "
-        "about products, returns, sizing, delivery, warranties, policies, etc.\n\n"
+        "Context: this is a knowledge base for mayors and municipal staff. "
+        "Users ask questions about commune internal data — finances, HR, "
+        "business records, patrimony, maintenance, deliberations, contracts, etc.\n\n"
         "Select the relevant index(es) to answer this query.\n\n"
         "STRICT rules (in this order):\n"
-        "1. Does the query EXPLICITLY mention the name of a known company "
-        f"({', '.join(company_names)})?\n"
-        "   - YES → return the relevant indexes for THAT company (topic + misc/divers)\n"
-        "   - NO → return ALL indexes from ALL companies\n"
-        "2. A product name, subject, or theme is NOT enough to identify a company. "
-        "Only the exact company name counts.\n"
-        "3. Indexes containing 'divers', 'misc', 'autre', 'support', 'customer', "
-        "'produit', 'product', 'faq', 'sav', 'retour', 'return' should be "
-        "PRIORITIZED for customer care queries (returns, sizing, products, delivery).\n"
-        "4. Indexes containing 'divers', 'misc', or 'autre' must ALWAYS be included "
-        "whenever at least one index from the same company is selected.\n"
-        "5. When in doubt, return ALL indexes — it is better to search too broadly "
+        "1. Does the query EXPLICITLY mention the name of a known commune "
+        f"({', '.join(commune_names)})?\n"
+        "   - YES → return the relevant indexes for THAT commune (matching category + misc/divers)\n"
+        "   - NO → return indexes matching the query's domain across ALL communes\n"
+        "2. A topic, project name, or theme is NOT enough to identify a commune. "
+        "Only the exact commune name counts.\n"
+        "3. Indexes containing 'divers', 'misc', 'autre', 'general' should always be "
+        "included whenever at least one index from the same commune is selected, "
+        "because miscellaneous folders may contain misfiled documents.\n"
+        "4. When in doubt, return more indexes — it is better to search too broadly "
         "than to miss the information.\n\n"
         "Respond ONLY with index names separated by commas, "
         "in lowercase, without explanation."
@@ -177,21 +176,21 @@ def _describe_hierarchy(available: list[str]) -> str:
 
     Example output::
 
-        - celio: rh, commercial, formation
-        - clientb: juridique, finance
+        - paris: finances, rh, patrimoine
+        - lyon: finances, metier
     """
     groups: dict[str, list[str]] = {}
     for name in available:
         if INDEX_SEP in name:
-            company, notion = name.split(INDEX_SEP, 1)
-            groups.setdefault(company, []).append(notion)
+            commune, category = name.split(INDEX_SEP, 1)
+            groups.setdefault(commune, []).append(category)
         else:
             groups.setdefault(name, [])
 
     lines = []
-    for company, notions in sorted(groups.items()):
-        if notions:
-            lines.append(f"  - {company}: {', '.join(sorted(notions))}")
+    for commune, categories in sorted(groups.items()):
+        if categories:
+            lines.append(f"  - {commune}: {', '.join(sorted(categories))}")
         else:
-            lines.append(f"  - {company} (index simple)")
+            lines.append(f"  - {commune} (single index)")
     return "\n".join(lines)

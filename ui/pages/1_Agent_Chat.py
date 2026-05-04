@@ -153,13 +153,50 @@ from components.chat_message import (
     render_error_message,
 )
 
+# Tools that return retrieval payloads (sources + chunks) to surface in the UI.
+_RETRIEVAL_TOOLS = {
+    "hybrid_query", "hybrid_rag_query", "hybrid_multi_query",
+    "hybrid_find_similar",
+}
+
+
+def _extract_retrieval_payload(tool_events: list[dict]) -> tuple[list[dict], list[dict]]:
+    """
+    Walk through tool_events, find the most recent successful retrieval
+    response, and return (sources, chunks). Returns ([], []) if none found.
+    """
+    sources: list[dict] = []
+    chunks: list[dict] = []
+    for ev in reversed(tool_events or []):
+        if ev.get("type") != "tool_resp":
+            continue
+        if ev.get("name") not in _RETRIEVAL_TOOLS:
+            continue
+        resp = ev.get("response", {}) or {}
+        if resp.get("status") != "success":
+            continue
+        sources = resp.get("sources") or []
+        chunks = resp.get("chunks") or []
+        if not chunks and "results_by_index" in resp:
+            chunks = [
+                c for cs in (resp.get("results_by_index") or {}).values()
+                for c in cs
+            ]
+        break
+    return sources, chunks
+
+
 for msg in _active_display():
     if msg["role"] == "user":
         render_user_message(msg["text"])
     elif msg["role"] == "assistant":
+        tool_events = msg.get("tool_events", [])
+        sources, chunks = _extract_retrieval_payload(tool_events)
         render_assistant_message(
             text=msg["text"],
-            tool_events=msg.get("tool_events", []),
+            tool_events=tool_events,
+            sources=sources,
+            chunks=chunks,
         )
     elif msg["role"] == "error":
         render_error_message(msg["text"])
@@ -186,8 +223,14 @@ if user_input:
             )
             final_text  = runner.extract_final_text(parsed)
             tool_events = [e for e in parsed if e["type"] in ("tool_call", "tool_resp")]
+            sources, chunks = _extract_retrieval_payload(tool_events)
 
-            render_assistant_message(text=final_text, tool_events=tool_events)
+            render_assistant_message(
+                text=final_text,
+                tool_events=tool_events,
+                sources=sources,
+                chunks=chunks,
+            )
             agent_append_message(USER_ID, sid, {
                 "role":        "assistant",
                 "text":        final_text,

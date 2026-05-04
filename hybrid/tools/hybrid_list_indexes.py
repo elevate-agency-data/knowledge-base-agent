@@ -7,6 +7,17 @@ Lists all hybrid indexes present in the local store with their stats.
 from hybrid.stores import get_store
 
 
+def _apply_role_filter(index_names: list[str]) -> list[str]:
+    """Filter index names against the current user role's whitelist."""
+    try:
+        from rag_agent.runtime_context import get_user_role
+        from shared.role_permissions import filter_indexes_for_role
+    except Exception:
+        # role module unavailable → no filtering (safe fallback for CLI/test contexts)
+        return index_names
+    return filter_indexes_for_role(index_names, get_user_role())
+
+
 def hybrid_list_indexes() -> dict:
     """
     List all hybrid indexes available in the local store.
@@ -25,7 +36,7 @@ def hybrid_list_indexes() -> dict:
 
         from hybrid.stores.duckdb_store import DuckDBStore
         if not isinstance(store, DuckDBStore):
-            index_names = store.list_indexes()
+            index_names = _apply_role_filter(store.list_indexes())
             return {
                 "status":  "success",
                 "indexes": [{"index_name": n} for n in index_names],
@@ -48,6 +59,10 @@ def hybrid_list_indexes() -> dict:
                 "indexes": [],
                 "total":   0,
             }
+
+        # Apply role-based whitelist before any per-index work.
+        allowed = set(_apply_role_filter([r[0] for r in registry_rows]))
+        registry_rows = [r for r in registry_rows if r[0] in allowed]
 
         indexes = []
         for row in registry_rows:

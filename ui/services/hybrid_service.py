@@ -30,6 +30,25 @@ def list_indexes() -> list[dict]:
         return []
 
 
+def list_indexes_for_user(role: str | None) -> list[dict]:
+    """
+    Return only the indexes a given role is allowed to query.
+
+    The page Knowledge Base / Admin still calls plain `list_indexes()` so they
+    see everything (admins can manage any index). For the **query path**
+    (Simple Chat, Agent), this filtered list enforces role-based access.
+    """
+    from shared.role_permissions import filter_indexes_for_role
+
+    indexes = list_indexes()
+    if not indexes:
+        return []
+    allowed_names = set(
+        filter_indexes_for_role([i.get("index_name", "") for i in indexes], role)
+    )
+    return [i for i in indexes if i.get("index_name", "") in allowed_names]
+
+
 def list_indexes_grouped() -> dict[str, list[dict]]:
     """
     Return indexes grouped by company (two-level hierarchy).

@@ -8,7 +8,11 @@ Accès réservé aux administrateurs.
 import path_setup  # noqa: F401
 import streamlit as st
 from config import APP_TITLE
-from auth import require_admin, create_user, list_users, set_user_active, reset_password
+from auth import (
+    require_admin, create_user, list_users,
+    set_user_active, set_user_role, reset_password,
+)
+from shared.role_permissions import ROLES
 from components.sidebar_auth import render_sidebar_user
 
 st.set_page_config(
@@ -42,7 +46,20 @@ with st.form("create_user_form", clear_on_submit=True):
     with col2:
         new_pw      = st.text_input("Mot de passe", type="password")
         new_confirm = st.text_input("Confirmer", type="password")
-    new_is_admin = st.checkbox("Compte administrateur")
+
+    col_role, col_admin = st.columns(2)
+    with col_role:
+        new_role = st.selectbox(
+            "Rôle métier",
+            ROLES,
+            index=ROLES.index("agent"),
+            help="Détermine quels index l'utilisateur peut interroger.",
+        )
+    with col_admin:
+        new_is_admin = st.checkbox(
+            "Compte administrateur",
+            help="Indépendant du rôle métier — donne accès à la gestion des users et à l'ingestion Drive.",
+        )
     create_btn   = st.form_submit_button("Créer le compte", type="primary")
 
 if create_btn:
@@ -53,9 +70,14 @@ if create_btn:
     elif len(new_pw) < 6:
         st.error("Mot de passe trop court (6 caractères minimum).")
     else:
-        result = create_user(new_email, new_pw, new_name, is_admin=new_is_admin)
+        result = create_user(
+            new_email, new_pw, new_name,
+            is_admin=new_is_admin, role=new_role,
+        )
         if result:
-            st.success(f"Compte créé pour **{result['email']}**.")
+            st.success(
+                f"Compte créé pour **{result['email']}** (rôle : {result['role']})."
+            )
             st.rerun()
         else:
             st.error("Cet email est déjà utilisé.")
@@ -72,12 +94,26 @@ if not users:
     st.info("Aucun utilisateur.")
 else:
     for u in users:
-        col_info, col_status, col_pw, col_toggle = st.columns([4, 2, 2, 1])
+        col_info, col_role, col_status, col_pw, col_toggle = st.columns([3, 2, 2, 2, 1])
 
         with col_info:
             badge = " 🔑" if u["is_admin"] else ""
             st.markdown(f"**{u['display_name']}**{badge}")
             st.caption(u["email"])
+
+        with col_role:
+            with st.popover(f"Rôle : **{u['role']}**"):
+                with st.form(f"role_edit_{u['id']}"):
+                    new_role_val = st.selectbox(
+                        "Nouveau rôle",
+                        ROLES,
+                        index=ROLES.index(u["role"]) if u["role"] in ROLES else ROLES.index("agent"),
+                        key=f"role_{u['id']}",
+                    )
+                    if st.form_submit_button("Mettre à jour"):
+                        set_user_role(u["id"], new_role_val)
+                        st.success(f"Rôle changé en **{new_role_val}**.")
+                        st.rerun()
 
         with col_status:
             status = "Actif" if u["is_active"] else "Désactivé"

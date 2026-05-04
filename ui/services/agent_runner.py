@@ -24,11 +24,18 @@ _DB_PATH  = Path(__file__).parent.parent.parent / "rag_agent" / ".adk" / "sessio
 
 # ── Async helper ──────────────────────────────────────────────────────────────
 
-def _run_coroutine(coro) -> Any:
+def _run_coroutine(coro, user_role: str | None = None) -> Any:
+    """
+    Run *coro* in a fresh thread+event loop, propagating *user_role*
+    into the worker thread's runtime context so tools can enforce RBAC.
+    """
     result: list[Any]       = [None]
     error:  list[Exception] = [None]
 
     def _target():
+        if user_role is not None:
+            from rag_agent.runtime_context import set_user_role
+            set_user_role(user_role)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -128,10 +135,19 @@ class AgentRunner:
 
     # ── Run ───────────────────────────────────────────────────────────────────
 
-    def run(self, user_id: str, session_id: str, message: str) -> list[dict]:
+    def run(
+        self,
+        user_id: str,
+        session_id: str,
+        message: str,
+        user_role: str | None = None,
+    ) -> list[dict]:
         """
         Envoie un message à l'agent. Retourne une liste d'événements parsés.
         Le contexte complet de la session est chargé automatiquement par ADK.
+
+        *user_role* est propagé au thread d'exécution pour que les tools
+        (hybrid_list_indexes, hybrid_query) appliquent le filtre RBAC.
         """
         from google.genai import types
 
@@ -148,7 +164,7 @@ class AgentRunner:
                 raw.append(event)
             return raw
 
-        return self._parse_events(_run_coroutine(_run()))
+        return self._parse_events(_run_coroutine(_run(), user_role=user_role))
 
     # ── Event parsing ─────────────────────────────────────────────────────────
 

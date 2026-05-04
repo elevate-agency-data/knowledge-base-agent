@@ -23,8 +23,9 @@ st.set_page_config(
 
 # ── Auth guard ────────────────────────────────────────────────────────────────
 
-user    = require_auth()
-USER_ID = user["id"]
+user      = require_auth()
+USER_ID   = user["id"]
+USER_ROLE = user.get("role", "agent")
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -111,21 +112,21 @@ with st.sidebar:
     if rag_on:
         st.divider()
         try:
-            from services.hybrid_service import list_indexes
-            _idx_names = [i["index_name"] for i in list_indexes()]
+            from services.hybrid_service import list_indexes_for_user
+            _idx_names = [i["index_name"] for i in list_indexes_for_user(USER_ROLE)]
         except Exception:
             _idx_names = []
 
         if _idx_names:
-            st.markdown("**Available indexes**")
+            st.markdown(f"**Indexes (role: `{USER_ROLE}`)**")
             for n in _idx_names:
                 st.caption(f"· {n}")
             st.caption(
                 "_Indexes detected automatically from your question. "
-                "All queried by default._"
+                "Only indexes allowed by your role are queried._"
             )
         else:
-            st.warning("No indexes available.")
+            st.warning("No indexes accessible for your role.")
 
     # ── Status badge ──────────────────────────────────────────────────────────
     st.divider()
@@ -276,14 +277,16 @@ if user_input:
                 import re
                 import time
                 from services.hybrid_service import (
-                    list_indexes,
+                    list_indexes_for_user,
                     resolve_indexes,
                     multi_query as hybrid_multi_query,
                 )
 
-                all_indexes = [i["index_name"] for i in list_indexes()]
+                all_indexes = [i["index_name"] for i in list_indexes_for_user(USER_ROLE)]
                 if not all_indexes:
-                    raise RuntimeError("No Hybrid indexes available.")
+                    raise RuntimeError(
+                        f"No Hybrid indexes accessible for role '{USER_ROLE}'."
+                    )
 
                 _drive_url = re.search(
                     r"https?://(?:drive|docs)\.google\.com/\S+",

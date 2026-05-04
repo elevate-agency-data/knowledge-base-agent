@@ -40,12 +40,19 @@ def _get_conn() -> sqlite3.Connection:
                 display_name  TEXT NOT NULL,
                 created_at    TEXT NOT NULL,
                 is_active     INTEGER NOT NULL DEFAULT 1,
-                is_admin      INTEGER NOT NULL DEFAULT 0
+                is_admin      INTEGER NOT NULL DEFAULT 0,
+                role          TEXT NOT NULL DEFAULT 'agent'
             )
         """)
         # Migration : ajoute is_admin si la table existait sans cette colonne
         try:
             _conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # Colonne déjà présente
+        # Migration : ajoute role + bootstrap (is_admin → maire, sinon agent)
+        try:
+            _conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'agent'")
+            _conn.execute("UPDATE users SET role = 'maire' WHERE is_admin = 1")
         except sqlite3.OperationalError:
             pass  # Colonne déjà présente
         _conn.commit()
@@ -76,6 +83,7 @@ def create_user(
     password: str,
     display_name: str,
     is_admin: bool = False,
+    role: str = "agent",
 ) -> dict | None:
     """
     Crée un utilisateur (réservé aux admins ou au script d'init).
@@ -86,10 +94,10 @@ def create_user(
     now     = datetime.now().isoformat()
     try:
         conn.execute(
-            "INSERT INTO users (id, email, password_hash, display_name, created_at, is_admin) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO users (id, email, password_hash, display_name, created_at, is_admin, role) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             [user_id, email.lower().strip(), _hash_password(password),
-             display_name.strip(), now, int(is_admin)],
+             display_name.strip(), now, int(is_admin), role],
         )
         conn.commit()
         return {
@@ -97,6 +105,7 @@ def create_user(
             "email":        email.lower().strip(),
             "display_name": display_name.strip(),
             "is_admin":     is_admin,
+            "role":         role,
         }
     except sqlite3.IntegrityError:
         return None  # Email déjà pris
@@ -105,17 +114,17 @@ def create_user(
 def authenticate_user(email: str, password: str) -> dict | None:
     """
     Vérifie les identifiants.
-    Retourne le dict user (avec is_admin) ou None si invalide / inactif.
+    Retourne le dict user (avec is_admin et role) ou None si invalide / inactif.
     """
     conn = _get_conn()
     row  = conn.execute(
-        "SELECT id, email, password_hash, display_name, is_active, is_admin "
+        "SELECT id, email, password_hash, display_name, is_active, is_admin, role "
         "FROM users WHERE email = ?",
         [email.lower().strip()],
     ).fetchone()
     if not row:
         return None
-    user_id, user_email, pw_hash, display_name, is_active, is_admin = row
+    user_id, user_email, pw_hash, display_name, is_active, is_admin, role = row
     if not is_active:
         return None
     if not _verify_password(password, pw_hash):
@@ -125,6 +134,7 @@ def authenticate_user(email: str, password: str) -> dict | None:
         "email":        user_email,
         "display_name": display_name,
         "is_admin":     bool(is_admin),
+        "role":         role or "agent",
     }
 
 
@@ -132,7 +142,7 @@ def list_users() -> list[dict]:
     """Retourne tous les utilisateurs (usage admin)."""
     conn = _get_conn()
     rows = conn.execute(
-        "SELECT id, email, display_name, created_at, is_active, is_admin "
+        "SELECT id, email, display_name, created_at, is_active, is_admin, role "
         "FROM users ORDER BY created_at DESC"
     ).fetchall()
     return [
@@ -143,9 +153,20 @@ def list_users() -> list[dict]:
             "created_at":   r[3],
             "is_active":    bool(r[4]),
             "is_admin":     bool(r[5]),
+            "role":         r[6] or "agent",
         }
         for r in rows
     ]
+
+
+def set_user_role(user_id: str, role: str) -> None:
+    """Met à jour le rôle métier d'un utilisateur."""
+    conn = _get_conn()
+    conn.execute(
+        "UPDATE users SET role = ? WHERE id = ?",
+        [role, user_id],
+    )
+    conn.commit()
 
 
 def set_user_active(user_id: str, active: bool) -> None:
@@ -176,12 +197,13 @@ def login_user(user: dict) -> None:
     st.session_state.user_email   = user["email"]
     st.session_state.display_name = user["display_name"]
     st.session_state.is_admin     = user.get("is_admin", False)
+    st.session_state.role         = user.get("role") or "agent"
 
 
 def logout_user() -> None:
     """Efface l'état auth + chat et redirige vers la page de login."""
     keys = [
-        "user_id", "user_email", "display_name", "is_admin",
+        "user_id", "user_email", "display_name", "is_admin", "role",
         "agent_active_session_id", "agent_sessions_cache",
         "sc_active_session_id", "sc_sessions_cache",
         "sc_messages", "sc_rag_on", "sc_pipeline", "sc_corpus",
@@ -206,6 +228,7 @@ def require_auth() -> dict:
         "email":        st.session_state.get("user_email", ""),
         "display_name": st.session_state.get("display_name", ""),
         "is_admin":     st.session_state.get("is_admin", False),
+        "role":         st.session_state.get("role", "agent"),
     }
 
 

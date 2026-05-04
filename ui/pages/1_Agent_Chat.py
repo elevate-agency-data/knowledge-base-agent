@@ -20,9 +20,10 @@ st.set_page_config(
 
 # ── Auth guard ────────────────────────────────────────────────────────────────
 
-user     = require_auth()
-USER_ID  = user["id"]
-IS_ADMIN = user["is_admin"]
+user      = require_auth()
+USER_ID   = user["id"]
+IS_ADMIN  = user["is_admin"]
+USER_ROLE = user.get("role", "agent")
 
 # ── Cached runner (one per role — admin gets write tools, users get read-only) ─
 
@@ -181,6 +182,7 @@ if user_input:
                 user_id=USER_ID,
                 session_id=sid,
                 message=user_input,
+                user_role=USER_ROLE,
             )
             final_text  = runner.extract_final_text(parsed)
             tool_events = [e for e in parsed if e["type"] in ("tool_call", "tool_resp")]

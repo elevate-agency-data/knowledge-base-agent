@@ -30,52 +30,106 @@ _lock: threading.Lock = threading.Lock()
 
 # ── Connexion & schéma ────────────────────────────────────────────────────────
 
+def _create_schema(conn: duckdb.DuckDBPyConnection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sc_sessions (
+            id          VARCHAR PRIMARY KEY,
+            user_id     VARCHAR NOT NULL,
+            name        VARCHAR NOT NULL,
+            rag_on      BOOLEAN NOT NULL DEFAULT FALSE,
+            pipeline    VARCHAR,
+            corpus      VARCHAR,
+            created_at  VARCHAR NOT NULL,
+            updated_at  VARCHAR NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sc_messages (
+            id          VARCHAR PRIMARY KEY,
+            session_id  VARCHAR NOT NULL,
+            user_id     VARCHAR NOT NULL,
+            position    INTEGER NOT NULL,
+            role        VARCHAR NOT NULL,
+            text        TEXT    NOT NULL,
+            sources     VARCHAR,
+            chunks      VARCHAR,
+            pipeline    VARCHAR,
+            elapsed_s   DOUBLE,
+            timings     VARCHAR,
+            created_at  VARCHAR NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS agent_messages (
+            id          VARCHAR PRIMARY KEY,
+            user_id     VARCHAR NOT NULL,
+            session_id  VARCHAR NOT NULL,
+            position    INTEGER NOT NULL,
+            role        VARCHAR NOT NULL,
+            text        TEXT    NOT NULL,
+            tool_events VARCHAR,
+            created_at  VARCHAR NOT NULL
+        )
+    """)
+
+
 def _get_conn() -> duckdb.DuckDBPyConnection:
     global _conn
     if _conn is None:
         _DB_DIR.mkdir(parents=True, exist_ok=True)
         _conn = duckdb.connect(str(_DB_PATH))
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS sc_sessions (
-                id          VARCHAR PRIMARY KEY,
-                user_id     VARCHAR NOT NULL,
-                name        VARCHAR NOT NULL,
-                rag_on      BOOLEAN NOT NULL DEFAULT FALSE,
-                pipeline    VARCHAR,
-                corpus      VARCHAR,
-                created_at  VARCHAR NOT NULL,
-                updated_at  VARCHAR NOT NULL
-            )
-        """)
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS sc_messages (
-                id          VARCHAR PRIMARY KEY,
-                session_id  VARCHAR NOT NULL,
-                user_id     VARCHAR NOT NULL,
-                position    INTEGER NOT NULL,
-                role        VARCHAR NOT NULL,
-                text        TEXT    NOT NULL,
-                sources     VARCHAR,
-                chunks      VARCHAR,
-                pipeline    VARCHAR,
-                elapsed_s   DOUBLE,
-                timings     VARCHAR,
-                created_at  VARCHAR NOT NULL
-            )
-        """)
-        _conn.execute("""
-            CREATE TABLE IF NOT EXISTS agent_messages (
-                id          VARCHAR PRIMARY KEY,
-                user_id     VARCHAR NOT NULL,
-                session_id  VARCHAR NOT NULL,
-                position    INTEGER NOT NULL,
-                role        VARCHAR NOT NULL,
-                text        TEXT    NOT NULL,
-                tool_events VARCHAR,
-                created_at  VARCHAR NOT NULL
-            )
-        """)
+        _create_schema(_conn)
     return _conn
+
+
+def _reset_conn() -> duckdb.DuckDBPyConnection:
+    """Close and reopen the chat DB — used to recover from DuckDB internal errors."""
+    global _conn
+    if _conn is not None:
+        try:
+            _conn.close()
+        except Exception:
+            pass
+        _conn = None
+    return _get_conn()
+
+
+def _execute(sql: str, params: list | None = None, fetch: str = "none"):
+    """
+    Run a SQL statement under the global lock with auto-recovery on
+    DuckDB ``InternalException`` (typically caused by cross-thread
+    cursor reuse — Streamlit reruns can collide with each other).
+
+    Args:
+        sql:    SQL statement.
+        params: Optional bind parameters.
+        fetch:  "none" | "one" | "all" — what to return from the cursor.
+
+    Returns:
+        - "none" → None
+        - "one"  → single row (tuple) or None
+        - "all"  → list of rows
+    """
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        with _lock:
+            try:
+                conn = _get_conn()
+                cur = conn.execute(sql, params or [])
+                if fetch == "one":
+                    return cur.fetchone()
+                if fetch == "all":
+                    return cur.fetchall()
+                return None
+            except duckdb.InternalException as exc:
+                last_exc = exc
+                # Borked connection → reset and retry once on next loop iteration
+                _reset_conn()
+            except Exception:
+                raise
+    if last_exc is not None:
+        raise last_exc
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -84,8 +138,7 @@ def _get_conn() -> duckdb.DuckDBPyConnection:
 
 def sc_list_sessions(user_id: str) -> list[dict]:
     """Retourne toutes les sessions de l'utilisateur, triées par dernière activité."""
-    conn = _get_conn()
-    rows = conn.execute("""
+    rows = _execute("""
         SELECT s.id, s.name, s.rag_on, s.pipeline, s.corpus,
                s.created_at, s.updated_at,
                COUNT(m.id) AS msg_count
@@ -95,7 +148,7 @@ def sc_list_sessions(user_id: str) -> list[dict]:
         GROUP BY s.id, s.name, s.rag_on, s.pipeline, s.corpus,
                  s.created_at, s.updated_at
         ORDER BY s.updated_at DESC
-    """, [user_id]).fetchall()
+    """, [user_id], fetch="all")
     return [
         {
             "id":         r[0],
@@ -129,13 +182,11 @@ def sc_new_session(
         "created_at": now,
         "updated_at": now,
     }
-    with _lock:
-        conn = _get_conn()
-        conn.execute(
-            "INSERT INTO sc_sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [session["id"], user_id, session["name"],
-             rag_on, pipeline, corpus, now, now],
-        )
+    _execute(
+        "INSERT INTO sc_sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [session["id"], user_id, session["name"],
+         rag_on, pipeline, corpus, now, now],
+    )
     return session
 
 
@@ -146,32 +197,27 @@ def sc_update_settings(
     corpus:     str | None,
 ) -> None:
     """Met à jour les paramètres RAG d'une session."""
-    with _lock:
-        conn = _get_conn()
-        conn.execute(
-            "UPDATE sc_sessions SET rag_on=?, pipeline=?, corpus=?, updated_at=? WHERE id=?",
-            [rag_on, pipeline, corpus, datetime.now().isoformat(), session_id],
-        )
+    _execute(
+        "UPDATE sc_sessions SET rag_on=?, pipeline=?, corpus=?, updated_at=? WHERE id=?",
+        [rag_on, pipeline, corpus, datetime.now().isoformat(), session_id],
+    )
 
 
 def sc_delete_session(session_id: str) -> None:
-    with _lock:
-        conn = _get_conn()
-        conn.execute("DELETE FROM sc_messages WHERE session_id = ?", [session_id])
-        conn.execute("DELETE FROM sc_sessions  WHERE id        = ?", [session_id])
+    _execute("DELETE FROM sc_messages WHERE session_id = ?", [session_id])
+    _execute("DELETE FROM sc_sessions  WHERE id        = ?", [session_id])
 
 
 # ── Simple Chat — messages ────────────────────────────────────────────────────
 
 def sc_load_messages(session_id: str) -> list[dict]:
     """Charge tous les messages d'une session, ordonnés par position."""
-    conn = _get_conn()
-    rows = conn.execute("""
+    rows = _execute("""
         SELECT role, text, sources, chunks, pipeline, elapsed_s, timings
         FROM sc_messages
         WHERE session_id = ?
         ORDER BY position ASC
-    """, [session_id]).fetchall()
+    """, [session_id], fetch="all")
     result = []
     for r in rows:
         msg: dict = {"role": r[0], "text": r[1]}
@@ -187,47 +233,45 @@ def sc_load_messages(session_id: str) -> list[dict]:
 def sc_append_message(session_id: str, user_id: str, msg: dict) -> None:
     """Insère un message et met à jour la session (updated_at + nom auto)."""
     now = datetime.now().isoformat()
-    with _lock:
-        conn = _get_conn()
-        row = conn.execute(
-            "SELECT COALESCE(MAX(position), -1) FROM sc_messages WHERE session_id = ?",
-            [session_id],
-        ).fetchone()
-        position = (row[0] if row else -1) + 1
+    row = _execute(
+        "SELECT COALESCE(MAX(position), -1) FROM sc_messages WHERE session_id = ?",
+        [session_id], fetch="one",
+    )
+    position = (row[0] if row else -1) + 1
 
-        conn.execute(
-            "INSERT INTO sc_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                str(uuid.uuid4()),
-                session_id,
-                user_id,
-                position,
-                msg["role"],
-                msg["text"],
-                json.dumps(msg["sources"], ensure_ascii=False)
-                    if msg.get("sources") is not None else None,
-                json.dumps(msg["chunks"],  ensure_ascii=False)
-                    if msg.get("chunks")  is not None else None,
-                msg.get("pipeline"),
-                msg.get("elapsed_s"),
-                json.dumps(msg["timings"], ensure_ascii=False)
-                    if msg.get("timings") is not None else None,
-                now,
-            ],
+    _execute(
+        "INSERT INTO sc_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            str(uuid.uuid4()),
+            session_id,
+            user_id,
+            position,
+            msg["role"],
+            msg["text"],
+            json.dumps(msg["sources"], ensure_ascii=False)
+                if msg.get("sources") is not None else None,
+            json.dumps(msg["chunks"],  ensure_ascii=False)
+                if msg.get("chunks")  is not None else None,
+            msg.get("pipeline"),
+            msg.get("elapsed_s"),
+            json.dumps(msg["timings"], ensure_ascii=False)
+                if msg.get("timings") is not None else None,
+            now,
+        ],
+    )
+    # Nommage automatique : premier message user → nom de la session
+    if msg["role"] == "user" and position == 0:
+        text = msg["text"]
+        name = (text[:45] + "…") if len(text) > 45 else text
+        _execute(
+            "UPDATE sc_sessions SET name=?, updated_at=? WHERE id=?",
+            [name, now, session_id],
         )
-        # Nommage automatique : premier message user → nom de la session
-        if msg["role"] == "user" and position == 0:
-            text = msg["text"]
-            name = (text[:45] + "…") if len(text) > 45 else text
-            conn.execute(
-                "UPDATE sc_sessions SET name=?, updated_at=? WHERE id=?",
-                [name, now, session_id],
-            )
-        else:
-            conn.execute(
-                "UPDATE sc_sessions SET updated_at=? WHERE id=?",
-                [now, session_id],
-            )
+    else:
+        _execute(
+            "UPDATE sc_sessions SET updated_at=? WHERE id=?",
+            [now, session_id],
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -236,13 +280,12 @@ def sc_append_message(session_id: str, user_id: str, msg: dict) -> None:
 
 def agent_load_messages(user_id: str, session_id: str) -> list[dict]:
     """Charge les messages d'affichage d'une session agent."""
-    conn = _get_conn()
-    rows = conn.execute("""
+    rows = _execute("""
         SELECT role, text, tool_events
         FROM agent_messages
         WHERE user_id = ? AND session_id = ?
         ORDER BY position ASC
-    """, [user_id, session_id]).fetchall()
+    """, [user_id, session_id], fetch="all")
     result = []
     for r in rows:
         msg: dict = {"role": r[0], "text": r[1]}
@@ -255,28 +298,26 @@ def agent_load_messages(user_id: str, session_id: str) -> list[dict]:
 def agent_append_message(user_id: str, session_id: str, msg: dict) -> None:
     """Insère un message d'affichage agent."""
     now = datetime.now().isoformat()
-    with _lock:
-        conn = _get_conn()
-        row = conn.execute(
-            "SELECT COALESCE(MAX(position), -1) "
-            "FROM agent_messages WHERE user_id = ? AND session_id = ?",
-            [user_id, session_id],
-        ).fetchone()
-        position = (row[0] if row else -1) + 1
-        conn.execute(
-            "INSERT INTO agent_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [
-                str(uuid.uuid4()),
-                user_id,
-                session_id,
-                position,
-                msg["role"],
-                msg["text"],
-                json.dumps(msg.get("tool_events"), ensure_ascii=False, default=str)
-                    if msg.get("tool_events") is not None else None,
-                now,
-            ],
-        )
+    row = _execute(
+        "SELECT COALESCE(MAX(position), -1) "
+        "FROM agent_messages WHERE user_id = ? AND session_id = ?",
+        [user_id, session_id], fetch="one",
+    )
+    position = (row[0] if row else -1) + 1
+    _execute(
+        "INSERT INTO agent_messages VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            str(uuid.uuid4()),
+            user_id,
+            session_id,
+            position,
+            msg["role"],
+            msg["text"],
+            json.dumps(msg.get("tool_events"), ensure_ascii=False, default=str)
+                if msg.get("tool_events") is not None else None,
+            now,
+        ],
+    )
 
 
 def agent_sessions_meta(user_id: str) -> dict[str, dict]:
@@ -284,15 +325,14 @@ def agent_sessions_meta(user_id: str) -> dict[str, dict]:
     Retourne un dict {session_id: {name, message_count}} pour enrichir
     la liste de sessions ADK dans agent_runner.list_sessions().
     """
-    conn = _get_conn()
-    rows = conn.execute("""
+    rows = _execute("""
         SELECT session_id,
                COUNT(*)                                        AS msg_count,
                MIN(CASE WHEN role = 'user' THEN text END)     AS first_user_msg
         FROM agent_messages
         WHERE user_id = ?
         GROUP BY session_id
-    """, [user_id]).fetchall()
+    """, [user_id], fetch="all")
     result: dict[str, dict] = {}
     for r in rows:
         sid, count, first = r[0], r[1], r[2] or ""

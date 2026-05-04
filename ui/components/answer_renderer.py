@@ -77,18 +77,49 @@ def _highlight_sources(text: str, sources: list[dict]) -> str:
             return _BADGE_LINK.format(url=url, label=label)
         return _BADGE_SPAN.format(label=label)
 
-    def _replace_parens(match):
-        inner = match.group(1).strip()
+    def _replace_inner(inner: str) -> str:
         citations = [c.strip() for c in inner.split(";") if c.strip()]
         badges = [_make_badge(c) for c in citations]
         return " " + " ".join(badges)
 
-    # Match parentheses containing __ (index references)
-    result = re.sub(r'\(([^()]*__[^()]*)\)', _replace_parens, text)
-    # Match parentheses containing file extensions
-    result = re.sub(r'\(([^()]*\.(?:pdf|docx|xlsx|pptx|doc|txt)[^()]*)\)', _replace_parens, result)
+    _CITATION_PATTERN = re.compile(
+        r'__|\.(?:pdf|docx|xlsx|xls|pptx|ppt|doc|txt|csv|md)\b',
+        re.IGNORECASE,
+    )
 
-    return result
+    # Walk the string and replace each balanced ``(...)`` whose content
+    # looks like a citation (contains ``__`` or a known file extension)
+    # with rendered badges. Inner parentheses are tolerated as long as
+    # the outer pair stays balanced — handles file names like
+    # ``Compte administratif Piscine (Recettes) 2023.xlsx``.
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] != "(":
+            out.append(text[i])
+            i += 1
+            continue
+        depth = 1
+        j = i + 1
+        while j < n and depth > 0:
+            if text[j] == "(":
+                depth += 1
+            elif text[j] == ")":
+                depth -= 1
+            j += 1
+        if depth != 0:
+            # Unbalanced — leave the rest as-is and stop scanning
+            out.append(text[i:])
+            break
+        inner = text[i + 1: j - 1]
+        if _CITATION_PATTERN.search(inner):
+            out.append(_replace_inner(inner))
+        else:
+            out.append(text[i:j])
+        i = j
+
+    return "".join(out)
 
 
 # ── Markdown to HTML converter ───────────────────────────────────────────────
@@ -190,6 +221,22 @@ def md_to_html(text: str) -> str:
     result = re.sub(r'\*\*\*', '<hr style="border:none;border-top:1px solid #D4E8DC;margin:16px 0">', result)
     result = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', result)
     result = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'<em>\1</em>', result)
+
+    # Markdown links: [label](https://...) → clickable label (preferred format)
+    result = re.sub(
+        r'\[([^\]]+)\]\((https?://[^\s\)]+)\)',
+        r'<a href="\2" target="_blank" style="color:#4285F4;text-decoration:underline">\1</a>',
+        result,
+    )
+
+    # Bare URLs in parens: `(https://...)` → keep the parens, make the URL itself clickable.
+    # Citation badges run on a later pass and match parens containing `__` or a known
+    # file extension — neither matches a Drive URL, so they don't conflict.
+    result = re.sub(
+        r'\((https?://[^\s\)]+)\)',
+        r'(<a href="\1" target="_blank" style="color:#4285F4;text-decoration:underline">\1</a>)',
+        result,
+    )
     return result
 
 

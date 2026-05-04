@@ -40,9 +40,10 @@ st.divider()
 
 st.subheader("Internal knowledge, instantly searchable")
 st.markdown(
-    "Indica indexes your commune's internal documents — finances, HR, business "
-    "records, patrimony, maintenance — and lets mayors and municipal staff find "
-    "answers in plain language, with sourced citations."
+    "Indica indexes the city hall's internal documents — finances, HR, "
+    "patrimony, maintenance, business records, indicators — and lets the "
+    "mayor, deputy mayors, accountants, HR officers and agents find answers "
+    "in plain language, with sourced citations."
 )
 
 st.divider()
@@ -70,7 +71,7 @@ with nav2:
 with nav3:
     st.markdown("### Knowledge Base Manager")
     st.markdown(
-        "Import documents from Google Drive, organize them by commune and category, "
+        "Import documents from Google Drive, organize them by data domain, "
         "and monitor the health of your knowledge base."
     )
 
@@ -89,12 +90,13 @@ def _get_indexes():
 
 try:
     indexes = _get_indexes()
-    communes = sorted({
-        n.split("__", 1)[0] for n in (i.get("index_name", "") for i in indexes) if n
+    domains = sorted({
+        (n.split("__", 1)[0] if "__" in n else n)
+        for n in (i.get("index_name", "") for i in indexes) if n
     })
 
     col_a, col_b, col_c = st.columns(3)
-    col_a.metric("Communes", len(communes))
+    col_a.metric("Domains", len(domains))
     col_b.metric("Indexes", len(indexes))
     col_c.metric(
         "Documents",

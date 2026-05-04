@@ -21,11 +21,15 @@ from shared.gemini_retry import generate_with_retry
 
 _REWRITER_MODEL = "gemini-2.0-flash-001"
 
-_SYSTEM_PROMPT = """You are a query optimizer for a knowledge base used by mayors and municipal staff.
+_SYSTEM_PROMPT = """You are a query optimizer for a French city-hall knowledge base.
 
-Your role: transform what a user types into a semantic query optimized for
-vector search in commune internal documentation (finances, HR, business
-records, patrimony, maintenance, etc.).
+The whole base belongs to ONE commune. Users (mayors, deputy mayors,
+accountants, HR officers, agents) ask questions about internal data —
+finances, RH, patrimoine, maintenance, métier, indicateurs de pilotage,
+rapports administratifs, etc.
+
+Your role: transform what a user types into a semantic query optimized
+for vector search across these data domains.
 
 Rules:
 - KEEP proper nouns: commune names, project names, supplier names, person names, document references

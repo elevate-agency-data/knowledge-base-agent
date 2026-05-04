@@ -4,9 +4,16 @@ Shared utility: resolve which hybrid indexes to query for a given prompt.
 Uses Gemini Flash to select thematically relevant indexes for a given query.
 Falls back to substring matching, then to all indexes if nothing is found.
 
-Understands the hierarchical naming convention ``commune__category``:
-  - If the user mentions a commune name, all its sub-indexes are included.
-  - If the user mentions a specific category, only matching sub-indexes are returned.
+Naming convention is generic: ``DOMAIN__SUBTOPIC`` (or just ``DOMAIN`` when
+there is no L2 wrapper).
+  - DOMAIN is the data domain — finances, RH, patrimoine, métier, divers,
+    pilotage, etc. — typically the L1 Drive folder name.
+  - SUBTOPIC, when present, is an optional refinement (which sub-zone /
+    which sub-collection lives inside that domain).
+  - The resolver maps French municipal vocabulary (budget, effectifs,
+    bâtiment, indicateurs, …) to the right domain rather than to the
+    sub-topic, to avoid bad matches when a label loosely overlaps a
+    keyword.
 
 Used by:
   - hybrid/tools/hybrid_query.py   (ADK tool — auto-resolution when index_names=[])
@@ -111,43 +118,56 @@ def resolve_indexes(query: str, available: list[str]) -> list[str]:
     if len(available) == 1:
         return available
 
-    # Build a human-readable description of the hierarchy for the LLM
-    communes = _describe_hierarchy(available)
-    hierarchy_hint = (
-        "Indexes follow the commune__category naming convention.\n"
-        f"Hierarchy:\n{communes}\n\n"
-        "You can respond with a commune name alone (e.g. 'paris') to "
-        "select all its sub-indexes, or a specific index (e.g. 'paris__finances').\n\n"
-    )
-
-    # Extract commune names for the prompt
-    commune_names = sorted({
-        name.split(INDEX_SEP, 1)[0] for name in available if INDEX_SEP in name
+    # Build a human-readable description of the hierarchy for the LLM.
+    # Naming convention is generic: ``L1__L2`` where L1 is the **data domain**
+    # (finances, RH, patrimoine, métier, divers, pilotage…) and L2 is an
+    # optional sub-topic (which commune / which sub-domain). When L2 is
+    # absent the index is single-segment.
+    hierarchy = _describe_hierarchy(available)
+    domain_names = sorted({
+        name.split(INDEX_SEP, 1)[0] if INDEX_SEP in name else name
+        for name in available
     })
 
     prompt = (
-        f"Available indexes: {', '.join(available)}\n"
-        f"{hierarchy_hint}"
-        f"Known communes: {', '.join(commune_names)}\n\n"
+        f"You are an index resolver for a French city-hall knowledge base.\n\n"
+        f"Available indexes:\n{hierarchy}\n\n"
+        f"Index naming convention: 'DOMAIN__SUBTOPIC' (or just 'DOMAIN' when "
+        f"there is no sub-topic). DOMAIN is the data domain — finances, "
+        f"RH, patrimoine, métier, divers, pilotage, etc. — NOT a city name.\n\n"
+        f"Known domains (L1): {', '.join(domain_names)}\n\n"
         f"Query: \"{query}\"\n\n"
-        "Context: this is a knowledge base for mayors and municipal staff. "
-        "Users ask questions about commune internal data — finances, HR, "
-        "business records, patrimony, maintenance, deliberations, contracts, etc.\n\n"
-        "Select the relevant index(es) to answer this query.\n\n"
-        "STRICT rules (in this order):\n"
-        "1. Does the query EXPLICITLY mention the name of a known commune "
-        f"({', '.join(commune_names)})?\n"
-        "   - YES → return the relevant indexes for THAT commune (matching category + misc/divers)\n"
-        "   - NO → return indexes matching the query's domain across ALL communes\n"
-        "2. A topic, project name, or theme is NOT enough to identify a commune. "
-        "Only the exact commune name counts.\n"
-        "3. Indexes containing 'divers', 'misc', 'autre', 'general' should always be "
-        "included whenever at least one index from the same commune is selected, "
-        "because miscellaneous folders may contain misfiled documents.\n"
-        "4. When in doubt, return more indexes — it is better to search too broadly "
-        "than to miss the information.\n\n"
-        "Respond ONLY with index names separated by commas, "
-        "in lowercase, without explanation."
+        "Pick the index(es) whose DOMAIN matches the user's intent. Use "
+        "common sense to map French municipal vocabulary to the right "
+        "domain:\n"
+        "- 'budget', 'dépenses', 'recettes', 'dotation', 'subvention', "
+        "'compte administratif', 'fiscalité', 'trésor' → finance / comptable\n"
+        "- 'effectifs', 'masse salariale', 'agents', 'fonctionnaires', "
+        "'formation', 'paie', 'absentéisme', 'congés' → RH / personnel\n"
+        "- 'bâtiment', 'équipement', 'inventaire', 'maintenance', "
+        "'travaux', 'énergie', 'parcelle', 'voirie' → patrimoine / maintenance\n"
+        "- 'matériel informatique', 'véhicules', 'opérationnel', "
+        "'service', 'délégation' → métier divers\n"
+        "- 'rapport', 'délibération', 'arrêté', 'orientation', "
+        "'égalité' → divers / rapports administratifs\n"
+        "- 'indicateurs', 'tableau de bord', 'pilotage', 'mandat' → pilotage / suivi\n\n"
+        "Rules:\n"
+        "1. Match on DOMAIN keywords first. The SUBTOPIC level (e.g. "
+        "'données piscine saint-raphaël') is a refinement — pick it only "
+        "if the query explicitly names that sub-topic; otherwise keep "
+        "the broader DOMAIN.\n"
+        "2. If the query is ambiguous between two domains, return both.\n"
+        "3. Indexes containing 'divers', 'misc', 'autre', 'général' should "
+        "always be added when their domain matches, because misfiled "
+        "documents may live there.\n"
+        "4. When in doubt, return MORE indexes — better to search too "
+        "broadly than to miss information.\n"
+        "5. NEVER pick an index just because a word loosely overlaps with "
+        "its label (e.g. 'budget' must NOT route to 'patrimoine-maintenance-"
+        "énergie' just because the label contains 'énergie').\n\n"
+        "Respond ONLY with index names separated by commas, in lowercase, "
+        "no explanation. You may answer with a domain (L1) alone to select "
+        "all its sub-topics."
     )
     try:
         from vertexai.generative_models import GenerativeModel

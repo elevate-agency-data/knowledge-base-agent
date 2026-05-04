@@ -10,7 +10,7 @@ from rag_agent.config import MODEL as GENERATION_MODEL, GENERATION_SYSTEM_PROMPT
 
 # ── Page meta ─────────────────────────────────────────────────────────────────
 APP_TITLE       = "Indica"
-APP_SUBTITLE    = "Knowledge base for city halls"
+APP_SUBTITLE    = "Knowledge base for the city hall"
 APP_ICON        = None
 LAYOUT          = "wide"
 

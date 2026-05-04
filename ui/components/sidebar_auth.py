@@ -15,7 +15,7 @@ def render_sidebar_nav() -> None:
     """
     is_admin = st.session_state.get("is_admin", False)
 
-    st.page_link("pages/Home.py",             label="Accueil"       )
+    st.page_link("pages/Home.py",             label="Home"       )
     st.page_link("pages/1_Agent_Chat.py",     label="Agent Chat"    )
     st.page_link("pages/5_Simple_Chat.py",    label="Simple Chat"   )
     st.page_link("pages/3_Index_Manager.py",  label="Knowledge Base" )

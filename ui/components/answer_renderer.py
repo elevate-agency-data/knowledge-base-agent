@@ -15,6 +15,9 @@ import re
 
 import streamlit as st
 
+import path_setup  # noqa: F401
+from config import ACCENT_COLOR, ACCENT_LIGHT
+
 
 # ── Source badge highlighting ────────────────────────────────────────────────
 
@@ -41,15 +44,15 @@ def _highlight_sources(text: str, sources: list[dict]) -> str:
 
     _BADGE_LINK = (
         '<a href="{url}" target="_blank" '
-        'style="background:#EBF3FD;color:#4285F4;padding:2px 8px;'
+        f'style="background:{ACCENT_LIGHT};color:{ACCENT_COLOR};padding:2px 8px;'
         'border-radius:4px;font-size:0.82em;text-decoration:none;'
-        'border:1px solid #4285F430;white-space:normal;'
+        f'border:1px solid {ACCENT_COLOR}30;white-space:normal;'
         'margin:0 2px">{label}</a>'
     )
     _BADGE_SPAN = (
-        '<span style="background:#EBF3FD;color:#4285F4;padding:2px 8px;'
+        f'<span style="background:{ACCENT_LIGHT};color:{ACCENT_COLOR};padding:2px 8px;'
         'border-radius:4px;font-size:0.82em;'
-        'border:1px solid #4285F430;white-space:normal;'
+        f'border:1px solid {ACCENT_COLOR}30;white-space:normal;'
         'margin:0 2px">{label}</span>'
     )
 
@@ -83,10 +86,11 @@ def _highlight_sources(text: str, sources: list[dict]) -> str:
         badges = [_make_badge(c) for c in citations]
         return " " + " ".join(badges)
 
-    # Match parentheses containing __ (index references)
-    result = re.sub(r'\(([^()]*__[^()]*)\)', _replace_parens, text)
+    # Match parentheses containing __ (index references).
+    # [^)]* instead of [^()]* to allow nested opening parens like (NOVEMBRE (CUSTOMER CARE)__05_...)
+    result = re.sub(r'\(([^)]*__[^)]*)\)', _replace_parens, text)
     # Match parentheses containing file extensions
-    result = re.sub(r'\(([^()]*\.(?:pdf|docx|xlsx|pptx|doc|txt)[^()]*)\)', _replace_parens, result)
+    result = re.sub(r'\(([^)]*\.(?:pdf|docx|xlsx|pptx|doc|txt)[^)]*)\)', _replace_parens, result)
 
     return result
 
@@ -108,7 +112,7 @@ def md_to_html(text: str) -> str:
         "border-collapse:collapse;width:100%;margin:8px 0;font-size:0.92em"
     )
     _TH_STYLE = (
-        "border:1px solid #C5D9F5;padding:6px 10px;background:#EBF3FD;"
+        f"border:1px solid {ACCENT_COLOR}40;padding:6px 10px;background:{ACCENT_LIGHT};"
         "text-align:left;font-weight:600"
     )
     _TD_STYLE = "border:1px solid #D4E8DC;padding:6px 10px"

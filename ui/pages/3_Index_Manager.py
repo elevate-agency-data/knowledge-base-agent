@@ -11,7 +11,7 @@ from __future__ import annotations
 import path_setup  # noqa: F401
 import streamlit as st
 
-from config import APP_TITLE, HYBRID_COLOR
+from config import APP_TITLE, HYBRID_COLOR, ACCENT_COLOR, ACCENT_LIGHT
 from hybrid.config import (
     BENCHMARK_EMBEDDING_MODELS,
     BENCHMARK_CHUNK_STRATEGIES,
@@ -233,7 +233,7 @@ with tab_tree:
 
         # Distinct palette — each company gets a clearly different color
         _PALETTE = [
-            "#4285F4",  # Blue (primary)
+            HYBRID_COLOR,  # Lacoste green (primary)
             "#2563EB",  # Blue
             "#D97706",  # Amber
             "#9333EA",  # Purple
@@ -259,7 +259,7 @@ with tab_tree:
             is_cc = any(kw in company.lower() for kw in _CUSTOMER_CARE_KEYWORDS)
             if is_cc:
                 display_label = "Customer Care"
-                color = "#4285F4"  # enhance primary blue
+                color = ACCENT_COLOR
             else:
                 region_num += 1
                 display_label = f"Region {region_num}"
@@ -307,7 +307,7 @@ with tab_tree:
         sb_labels.append("Knowledge Base")
         sb_parents.append("")
         sb_values.append(max(grand_total_files, 1))
-        sb_colors.append("#EBF3FD")
+        sb_colors.append(ACCENT_LIGHT)
         sb_hover.append(
             f"<b>Knowledge Base</b><br>"
             f"{len(grouped)} regions · {len(all_indexes)} topics<br>"
@@ -380,7 +380,7 @@ with tab_tree:
         # Root at center
         net_nodes.append(dict(
             id="root", label="Knowledge\nBase", x=0, y=0,
-            size=40, color="#4285F4",
+            size=40, color=ACCENT_COLOR,
             hover=(
                 f"<b>Knowledge Base</b><br>"
                 f"{len(grouped)} regions · {len(all_indexes)} topics<br>"
@@ -402,7 +402,7 @@ with tab_tree:
 
             is_cc = any(kw in company.lower() for kw in _CUSTOMER_CARE_KEYWORDS)
             if is_cc:
-                color = "#4285F4"
+                color = ACCENT_COLOR
                 c_label = "Customer\nCare"
             else:
                 net_region_num += 1
@@ -542,9 +542,9 @@ with tab_tree:
                     files = idx.get("total_files", 0)
 
                     st.markdown(
-                        f"<div style='border-left:3px solid #4285F4;padding:8px 12px;"
-                        f"margin:8px 0;background:#EBF3FD;border-radius:0 6px 6px 0'>"
-                        f"<strong style='color:#4285F4;font-size:1.05em'>"
+                        f"<div style='border-left:3px solid {ACCENT_COLOR};padding:8px 12px;"
+                        f"margin:8px 0;background:{ACCENT_LIGHT};border-radius:0 6px 6px 0'>"
+                        f"<strong style='color:{ACCENT_COLOR};font-size:1.05em'>"
                         f"{notion.upper().replace('_', ' ')}</strong>"
                         f"<span style='color:#666;font-size:0.85em;margin-left:12px'>"
                         f"{files} documents · {chunks} segments</span>"

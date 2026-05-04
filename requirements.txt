@@ -11,6 +11,7 @@ google-adk
 # hybrid/ — pipeline RAG custom
 duckdb
 openpyxl
+xlrd        # legacy .xls reader (paired with pandas) — required by extract_from_xlsx fallback
 sentence-transformers
 FlagEmbedding
 pymupdf

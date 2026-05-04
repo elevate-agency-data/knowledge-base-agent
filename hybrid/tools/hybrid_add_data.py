@@ -501,7 +501,12 @@ def hybrid_add_data_auto(
 
     for company, notions in tree.items():
         for notion, file_infos in notions.items():
-            index_name = f"{company}{INDEX_SEP}{notion}"
+            # Empty notion key = files sitting directly at L1 (no L2 subfolder).
+            # Use a single-segment index name (no `__` separator) so the
+            # registry / role filter / UI all treat it as a flat L1 index.
+            index_name = (
+                f"{company}{INDEX_SEP}{notion}" if notion else company
+            )
             print(f"[auto] === {index_name} ({len(file_infos)} file(s)) ===")
 
             # Ensure index exists
@@ -559,8 +564,9 @@ def hybrid_add_data_auto(
                     from hybrid.ingestion.metadata import detect_language
                     _sample = text[:5000]
                     doc_language = detect_language(_sample)
-                    # Use the notion folder name as domaine instead of keyword detection
-                    doc_domaine = notion.upper()
+                    # Use the notion folder name as domaine instead of keyword detection.
+                    # When notion is empty (files at L1), fall back to the company name.
+                    doc_domaine = (notion or company).upper()
 
                     texts_to_embed = [c["content"] for c in chunks]
                     embeddings = _embed_in_batches(embedder, texts_to_embed, batch_size=64)

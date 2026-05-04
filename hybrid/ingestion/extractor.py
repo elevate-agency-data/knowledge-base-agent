@@ -173,32 +173,60 @@ def extract_from_docx(file_id: str, drive_service: Any) -> str:
     return "\n\n".join(lines)
 
 
-def extract_from_xlsx(file_id: str, drive_service: Any) -> str:
+def extract_from_xlsx(file_id: str, drive_service: Any, mime_type: str = "") -> str:
     """
-    Download and extract text from a .xlsx (or legacy .xls) file.
+    Download and extract text from a .xlsx or legacy .xls file.
 
     Each sheet is exported as tab-separated rows.
+
+    Strategy:
+    - .xlsx (Office Open XML) → openpyxl
+    - .xls  (legacy binary)   → pandas + xlrd fallback
 
     Args:
         file_id:       Google Drive file ID.
         drive_service: Authenticated Google Drive API service object.
+        mime_type:     Optional MIME hint to pick the right reader. If empty,
+                       openpyxl is tried first and we fall back on failure.
 
     Returns:
         Plain text with one row per line, sheets separated by headers.
     """
-    import openpyxl
-
     request = drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
     buf = io.BytesIO(request.execute())
-    wb = openpyxl.load_workbook(buf, read_only=True, data_only=True)
-    lines: list[str] = []
-    for sheet in wb.worksheets:
-        lines.append(f"=== {sheet.title} ===")
-        for row in sheet.iter_rows(values_only=True):
-            cells = [str(c) for c in row if c is not None and str(c).strip()]
+
+    is_legacy_xls = mime_type == "application/vnd.ms-excel"
+
+    if not is_legacy_xls:
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(buf, read_only=True, data_only=True)
+            lines: list[str] = []
+            for sheet in wb.worksheets:
+                lines.append(f"=== {sheet.title} ===")
+                for row in sheet.iter_rows(values_only=True):
+                    cells = [str(c) for c in row if c is not None and str(c).strip()]
+                    if cells:
+                        lines.append("\t".join(cells))
+            wb.close()
+            return "\n".join(lines)
+        except Exception:
+            buf.seek(0)  # reset stream for pandas fallback
+
+    # Legacy .xls (or openpyxl failure) — use pandas which dispatches
+    # to xlrd / olefile for the legacy binary format.
+    import pandas as pd
+    sheets = pd.read_excel(buf, sheet_name=None, dtype=str)  # dict {name: df}
+    lines = []
+    for name, df in sheets.items():
+        lines.append(f"=== {name} ===")
+        df = df.fillna("")
+        # Header row
+        lines.append("\t".join(str(c) for c in df.columns))
+        for _, row in df.iterrows():
+            cells = [str(c) for c in row.values if str(c).strip()]
             if cells:
                 lines.append("\t".join(cells))
-    wb.close()
     return "\n".join(lines)
 
 
@@ -286,7 +314,7 @@ def extract_from_url(url: str, drive_service: Any) -> str:
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "application/vnd.ms-excel",
     ):
-        return extract_from_xlsx(file_id, drive_service)
+        return extract_from_xlsx(file_id, drive_service, mime_type=mime)
     elif mime in (
         "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         "application/vnd.ms-powerpoint",
@@ -298,20 +326,33 @@ def extract_from_url(url: str, drive_service: Any) -> str:
 
 def list_drive_tree(drive_service: Any) -> dict[str, dict[str, list[dict]]]:
     """
-    Scan the Drive root folder and return a two-level tree: company → notion → files.
+    Scan the Drive root folder and return a two-level tree: L1 → L2 → files.
 
-    Expects the following structure under DRIVE_ROOT_FOLDER::
+    Supports two structural patterns under DRIVE_ROOT_FOLDER:
 
-        RAG (Test & Co)/
-          ├── Celio/
-          │    ├── RH/        → [FileInfo, ...]
-          │    └── Commercial/ → [FileInfo, ...]
-          └── ClientB/
-               └── Juridique/ → [FileInfo, ...]
+    1. **Standard two-level** — L1 folder contains only L2 subfolders::
+
+        Rag_indica/
+          └── Finances/                → tree["finances"]["budget"] = [FileInfo, ...]
+              └── Budget/
+
+    2. **Flat L1** — L1 folder contains files directly (no L2 subfolder)::
+
+        Rag_indica/
+          └── Patrimoine/              → tree["patrimoine"][""] = [FileInfo, ...]
+              ├── inventaire.xlsx
+              └── plan.pdf
+
+    Mixed L1 (both files at L1 + L2 subfolders) is also supported — the
+    files at L1 are collected under the empty notion key ``""`` while
+    each L2 subfolder gets its own key.
+
+    The empty notion key is later interpreted by ``hybrid_add_data_auto``
+    as a request for a single-segment index name (no ``__`` separator).
 
     Returns:
-        Dict like ``{"celio": {"rh": [FileInfo, ...], "commercial": [...]}, ...}``.
-        Keys are lowercased.
+        Dict like ``{"finances": {"budget": [...], "": [files_at_L1]}, ...}``.
+        Keys are lowercased; the special ``""`` key holds files at L1.
     """
     from hybrid.config import DRIVE_ROOT_FOLDER
 
@@ -321,20 +362,78 @@ def list_drive_tree(drive_service: Any) -> dict[str, dict[str, list[dict]]]:
 
     tree: dict[str, dict[str, list[dict]]] = {}
 
-    # Level 1 — company folders
-    company_folders = _list_subfolders(root_id, drive_service)
-    for company_name, company_id in company_folders:
-        company_key = company_name.strip().lower()
-        tree[company_key] = {}
+    # Level 1 — top-level folders
+    l1_folders = _list_subfolders(root_id, drive_service)
+    for l1_name, l1_id in l1_folders:
+        l1_key = l1_name.strip().lower()
+        tree[l1_key] = {}
 
-        # Level 2 — notion folders
-        notion_folders = _list_subfolders(company_id, drive_service)
-        for notion_name, notion_id in notion_folders:
-            notion_key = notion_name.strip().lower()
-            files = _list_folder_by_id(notion_id, drive_service, recursive=True)
-            tree[company_key][notion_key] = files
+        # Files DIRECTLY at L1 (non-recursive — recursion is reserved for L2)
+        l1_direct_files = _list_folder_files_only(l1_id, drive_service)
+        if l1_direct_files:
+            tree[l1_key][""] = l1_direct_files
+
+        # Level 2 — sub-folders, each gets its own (recursive) file list
+        l2_folders = _list_subfolders(l1_id, drive_service)
+        for l2_name, l2_id in l2_folders:
+            l2_key = l2_name.strip().lower()
+            files = _list_folder_by_id(l2_id, drive_service, recursive=True)
+            tree[l1_key][l2_key] = files
 
     return tree
+
+
+def _list_folder_files_only(folder_id: str, drive_service: Any) -> list[dict]:
+    """
+    Like ``_list_folder_by_id`` but **non-recursive** and skips subfolders.
+
+    Used to collect files sitting directly at L1 (without an L2 wrapper)
+    so they can be ingested into a single-segment index.
+    """
+    q = f"'{folder_id}' in parents and trashed = false"
+    result: list[dict] = []
+    page_token = None
+
+    while True:
+        kwargs: dict = dict(
+            q=q,
+            fields=(
+                "nextPageToken, "
+                "files(id, name, mimeType, webViewLink, "
+                "createdTime, modifiedTime, owners)"
+            ),
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            pageSize=1000,
+        )
+        if page_token:
+            kwargs["pageToken"] = page_token
+        resp = drive_service.files().list(**kwargs).execute()
+
+        for f in resp.get("files", []):
+            mime = f.get("mimeType", "")
+            if mime == "application/vnd.google-apps.folder":
+                continue  # skip subfolders — only direct files
+            if mime not in _MIME_TO_TYPE:
+                continue
+            owners = f.get("owners", [])
+            author = owners[0].get("displayName", "") if owners else ""
+            result.append({
+                "file_id":    f["id"],
+                "file_name":  f.get("name", ""),
+                "file_type":  _MIME_TO_TYPE.get(mime, "Other"),
+                "mime_type":  mime,
+                "source_url": f.get("webViewLink", ""),
+                "created_at": f.get("createdTime", ""),
+                "updated_at": f.get("modifiedTime", ""),
+                "author":     author,
+            })
+
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+
+    return result
 
 
 def _list_subfolders(parent_id: str, drive_service: Any) -> list[tuple[str, str]]:

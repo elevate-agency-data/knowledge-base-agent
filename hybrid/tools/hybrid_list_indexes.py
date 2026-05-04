@@ -2,6 +2,12 @@
 ADK tool: hybrid_list_indexes
 
 Lists all hybrid indexes present in the local store with their stats.
+
+Two entry points:
+- ``list_indexes_raw()``      → unfiltered registry read (used by UI services).
+- ``hybrid_list_indexes()``   → ADK tool, applies the runtime role filter
+                                 (used by the agent so it can only see
+                                 indexes allowed to the current user).
 """
 
 from hybrid.stores import get_store
@@ -18,6 +24,16 @@ def _apply_role_filter(index_names: list[str]) -> list[str]:
     return filter_indexes_for_role(index_names, get_user_role())
 
 
+def list_indexes_raw() -> dict:
+    """
+    Unfiltered registry read — bypasses any role-based filtering.
+
+    Used by UI services (Knowledge Base manager, admin views) where the
+    full list must be visible regardless of who is logged in.
+    """
+    return _list_indexes(apply_filter=False)
+
+
 def hybrid_list_indexes() -> dict:
     """
     List all hybrid indexes available in the local store.
@@ -31,12 +47,19 @@ def hybrid_list_indexes() -> dict:
         - ``indexes`` : List of index info dicts
         - ``total``   : Number of indexes found
     """
+    return _list_indexes(apply_filter=True)
+
+
+def _list_indexes(apply_filter: bool) -> dict:
     try:
         store = get_store()
 
         from hybrid.stores.duckdb_store import DuckDBStore
         if not isinstance(store, DuckDBStore):
-            index_names = _apply_role_filter(store.list_indexes())
+            names = store.list_indexes()
+            if apply_filter:
+                names = _apply_role_filter(names)
+            index_names = names
             return {
                 "status":  "success",
                 "indexes": [{"index_name": n} for n in index_names],
@@ -61,8 +84,9 @@ def hybrid_list_indexes() -> dict:
             }
 
         # Apply role-based whitelist before any per-index work.
-        allowed = set(_apply_role_filter([r[0] for r in registry_rows]))
-        registry_rows = [r for r in registry_rows if r[0] in allowed]
+        if apply_filter:
+            allowed = set(_apply_role_filter([r[0] for r in registry_rows]))
+            registry_rows = [r for r in registry_rows if r[0] in allowed]
 
         indexes = []
         for row in registry_rows:

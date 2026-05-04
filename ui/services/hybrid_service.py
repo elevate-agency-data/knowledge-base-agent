@@ -14,15 +14,15 @@ import time
 
 def list_indexes() -> list[dict]:
     """
-    Return all known hybrid indexes.
+    Return all known hybrid indexes — unfiltered.
 
-    Returns:
-        List of dicts with keys: index_name, embedding_model, chunk_strategy,
-        created_at, total_chunks, total_files.
+    Used by admin / management views (Knowledge Base manager) where the
+    full list must be visible. Role-based filtering for the query path
+    lives in :func:`list_indexes_for_user`.
     """
     try:
-        from hybrid.tools.hybrid_list_indexes import hybrid_list_indexes
-        result = hybrid_list_indexes()
+        from hybrid.tools.hybrid_list_indexes import list_indexes_raw
+        result = list_indexes_raw()
         if result.get("status") == "success":
             return result.get("indexes", [])
         return []

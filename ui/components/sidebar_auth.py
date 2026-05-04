@@ -23,8 +23,6 @@ def render_sidebar_nav() -> None:
     if is_admin:
         st.divider()
         st.caption("Admin")
-        st.page_link("pages/4_Benchmark.py",       label="Benchmark"     )
-        st.page_link("pages/2_RAG_Comparison.py",  label="RAG Comparison" )
         st.page_link("pages/6_Admin.py",           label="Administration" )
 
 

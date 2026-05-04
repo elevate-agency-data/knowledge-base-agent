@@ -1,5 +1,5 @@
 """
-Workshop Chatbot Knowledge Base — AI for Customer Care
+Indica — Knowledge base for city halls
 Point d'entrée Streamlit : router de navigation dynamique.
 
 Toutes les pages sont toujours enregistrées (position="hidden") pour éviter
@@ -48,12 +48,10 @@ _warmup()
 # Login est la page par défaut (URL racine / session expirée).
 pages = [
     st.Page("pages/0_Login.py",          title="Login",          default=True),
-    st.Page("pages/Home.py",             title="Accueil"),
+    st.Page("pages/Home.py",             title="Home"),
     st.Page("pages/1_Agent_Chat.py",     title="Agent Chat"),
     st.Page("pages/5_Simple_Chat.py",    title="Simple Chat"),
     st.Page("pages/3_Index_Manager.py",  title="Knowledge Base"),
-    st.Page("pages/4_Benchmark.py",      title="Benchmark"),
-    st.Page("pages/2_RAG_Comparison.py", title="RAG Comparison"),
     st.Page("pages/6_Admin.py",          title="Administration"),
 ]
 

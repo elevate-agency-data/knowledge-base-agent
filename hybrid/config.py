@@ -67,20 +67,6 @@ SPARSE_WEIGHT: float = 0.3
 RRF_K: int = 60
 
 # ---------------------------------------------------------------------------
-# Benchmark
-# ---------------------------------------------------------------------------
-BENCHMARK_EMBEDDING_MODELS: list[str] = [
-    "minilm-384",
-    "mpnet-768",
-    "e5-large-1024",
-    "bge-m3",
-    "vertex",
-]
-BENCHMARK_CHUNK_SIZES: list[int] = [128, 256, 512, 1024]   # tokens, fixed strategy only
-BENCHMARK_CHUNK_STRATEGIES: list[str] = ["fixed", "semantic", "hierarchical"]
-BENCHMARK_RETRIEVAL_MODES: list[str] = ["dense", "sparse", "hybrid"]
-
-# ---------------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------------
 MODEL: str = "gemini-2.5-pro"

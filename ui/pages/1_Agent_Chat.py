@@ -126,10 +126,10 @@ with st.sidebar:
     st.divider()
     st.markdown("**Quick actions**")
     st.code("list all indexes")
-    st.code("search [topic] about [question]")
+    st.code("search [commune__category] about [question]")
     if IS_ADMIN:
-        st.code("create an index [name]")
-        st.code("add folder [X] to index [Y]")
+        st.code("create an index [commune__category]")
+        st.code("add folder [X] to index [commune__category]")
         st.code("delete index [name]")
 
     render_sidebar_user_info()
@@ -142,7 +142,7 @@ active_meta  = next((s for s in sessions if s["id"] == _active_sid()), None)
 session_name = active_meta["name"] if active_meta else "New conversation"
 
 st.title(session_name)
-st.caption("The AI agent automatically selects the best retrieval pipeline for your question.")
+st.caption("The AI agent automatically selects the relevant indexes and retrieves the best answer for your question.")
 
 # ── Chat history ──────────────────────────────────────────────────────────────
 

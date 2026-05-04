@@ -2,7 +2,7 @@
 Simple Chat Agent — chatbot conversationnel sans pipeline RAG vectoriel.
 
 Dispose uniquement d'outils Drive/index pour lire des documents et explorer
-les dossiers. Ne fait PAS de recherche vectorielle (rag_query, hybrid_query).
+les dossiers. Ne fait PAS de recherche vectorielle (hybrid_query).
 
 Utilisé par la page Simple Chat (mode « Sans RAG »).
 """
@@ -42,7 +42,7 @@ simple_chat_agent = Agent(
 
     Tu ne fais **pas** de recherche vectorielle RAG.
     Si l'utilisateur veut interroger la base de connaissances (recherche sémantique),
-    dis-lui de changer de mode dans la barre latérale (Vertex AI ou Hybrid RAG).
+    dis-lui d'activer le mode Hybrid RAG dans la barre latérale.
 
     ## Comportement
 

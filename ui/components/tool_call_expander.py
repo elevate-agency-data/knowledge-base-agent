@@ -22,11 +22,9 @@ _TOOL_ICONS: dict[str, str] = {
     "hybrid_list_indexes": "",
     "hybrid_index_info":   "",
     "hybrid_list_drive":   "",
-    "rag_query":           "",
-    "create_corpus":       "",
-    "add_data":            "",
-    "delete_corpus":       "",
-    "list_corpora":        "",
+    "hybrid_find_similar": "",
+    "compare_documents":   "",
+    "query_document":      "",
     "get_document_content":"",
 }
 

@@ -1,15 +1,15 @@
 """
-Vertex AI RAG service — direct calls without ADK ToolContext.
+Vertex AI service — direct LLM calls (no RAG retrieval).
 
-Used by the comparison page to query Vertex AI independently of the agent.
-Replicates the core logic of rag_agent/tools/rag_query.py without the
-ToolContext dependency so it can be called from plain Streamlit code.
+Used for two purposes:
+  - `direct_query`: chat without retrieval (RAG-off mode in Simple Chat)
+  - `synthesize_from_context`: final answer generation when Hybrid RAG
+    returns raw chunks and we need an LLM to compose the response.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Any
 
 
 def _init_vertex() -> None:
@@ -32,163 +32,6 @@ def _init_vertex() -> None:
         vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=creds)
     except Exception:
         vertexai.init(project=PROJECT_ID, location=LOCATION)
-
-
-def extract_query_from_drive_url(document_url: str) -> str:
-    """
-    Extract a retrieval-optimized text query from a Google Drive document URL.
-
-    Flow:
-      1. Extract raw text content from the Drive document.
-      2. If the text is short (< 1500 chars), use it directly.
-         If long, ask Gemini Flash to produce a ~150-word thematic summary
-         that captures the document's key topics and entities.
-      3. Return the summary/text — caller passes it to query() as query_text.
-
-    Args:
-        document_url: Full Google Drive URL.
-
-    Returns:
-        A text string suitable as a semantic query.
-        Falls back to the raw URL on extraction failure.
-    """
-    _init_vertex()
-    try:
-        from rag_agent.tools.get_document_content import get_document_content
-        result = get_document_content(document_url)
-        if result.get("status") != "success":
-            return document_url
-
-        text  = result.get("content", "").strip()
-        title = result.get("title", "")
-        if not text:
-            return title or document_url
-
-        if len(text) <= 1500:
-            return f"{title}\n{text}" if title else text
-
-        # Long document → summarise with Gemini Flash
-        from vertexai.generative_models import GenerativeModel
-        model = GenerativeModel("gemini-2.0-flash-001")
-        prompt = (
-            f"Voici le contenu d'un document intitulé « {title} ».\n\n"
-            f"{text[:8000]}\n\n"
-            "Résume en 150 mots maximum les thèmes principaux, entités clés "
-            "(noms de clients, projets, technologies) et sujets abordés. "
-            "Ne commence pas par « Ce document » — donne directement les thèmes."
-        )
-        response = model.generate_content(prompt)
-        summary  = response.text.strip() if hasattr(response, "text") else ""
-        return summary if summary else text[:1500]
-    except Exception:
-        return document_url
-
-
-def find_similar(corpus_name: str, document_url: str) -> dict:
-    """
-    Find documents similar to a Google Drive document in a Vertex AI RAG corpus.
-
-    Flow:
-      1. Extract text content from the Drive document.
-      2. Use that text as a retrieval query against the Vertex RAG corpus
-         (pure retrieval — no LLM generation).
-      3. Deduplicate results by URI and return a ranked list of similar docs.
-
-    Args:
-        corpus_name:  Display name or resource name of the Vertex corpus.
-        document_url: Full Google Drive URL of the source document.
-
-    Returns:
-        Dict with keys:
-        - status          : "success" | "error"
-        - source_document : Echo of document_url
-        - corpus_name     : Echo of corpus_name
-        - results         : List of {title, uri, score} dicts, ranked by score
-        - total_results   : Number of unique documents found
-        - elapsed_s       : Wall-clock time in seconds
-    """
-    _init_vertex()
-    from vertexai import rag
-    from rag_agent.config import DEFAULT_TOP_K, DEFAULT_DISTANCE_THRESHOLD
-    from rag_agent.tools.utils import get_corpus_resource_name
-
-    t0 = time.perf_counter()
-    try:
-        doc_query = extract_query_from_drive_url(document_url)
-        if not doc_query or doc_query == document_url:
-            return {
-                "status":    "error",
-                "message":   "Impossible d'extraire le contenu du document.",
-                "elapsed_s": round(time.perf_counter() - t0, 2),
-            }
-
-        corpus_resource_name = get_corpus_resource_name(corpus_name)
-
-        response = rag.retrieval_query(
-            rag_resources=[rag.RagResource(rag_corpus=corpus_resource_name)],
-            text=doc_query,
-            rag_retrieval_config=rag.RagRetrievalConfig(
-                top_k=DEFAULT_TOP_K,
-                filter=rag.utils.resources.Filter(
-                    vector_distance_threshold=DEFAULT_DISTANCE_THRESHOLD
-                ),
-            ),
-        )
-
-        # Deduplicate by URI, keep highest score per document
-        seen: dict[str, dict] = {}
-        for chunk in response.contexts.contexts:
-            uri   = getattr(chunk, "source_uri",   None) or ""
-            title = getattr(chunk, "source_display_name", None) or "Document sans titre"
-            score = float(getattr(chunk, "score", 0.0))
-            if uri and uri != document_url:
-                if uri not in seen or score > seen[uri]["score"]:
-                    seen[uri] = {"title": title, "uri": uri, "score": round(score, 4)}
-
-        results = sorted(seen.values(), key=lambda x: x["score"], reverse=True)
-
-        return {
-            "status":          "success",
-            "source_document": document_url,
-            "corpus_name":     corpus_name,
-            "results":         results,
-            "total_results":   len(results),
-            "elapsed_s":       round(time.perf_counter() - t0, 2),
-        }
-
-    except Exception as exc:
-        return {
-            "status":          "error",
-            "message":         str(exc),
-            "source_document": document_url,
-            "corpus_name":     corpus_name,
-            "results":         [],
-            "elapsed_s":       round(time.perf_counter() - t0, 2),
-        }
-
-
-def list_corpora() -> list[dict]:
-    """
-    Return all available Vertex AI RAG corpora.
-
-    Returns:
-        List of dicts with keys: resource_name, display_name, create_time, update_time.
-    """
-    try:
-        _init_vertex()
-        from vertexai import rag
-        corpora = rag.list_corpora()
-        return [
-            {
-                "resource_name": c.name,
-                "display_name":  c.display_name,
-                "create_time":   str(getattr(c, "create_time", "")),
-                "update_time":   str(getattr(c, "update_time", "")),
-            }
-            for c in corpora
-        ]
-    except Exception as exc:
-        return []
 
 
 def direct_query(query_text: str, context: str = "") -> dict:
@@ -281,87 +124,4 @@ def synthesize_from_context(
             "message":   str(exc),
             "answer":    "",
             "elapsed_s": round(time.perf_counter() - t0, 2),
-        }
-
-
-def query(corpus_name: str, query_text: str, context: str = "", retrieval_query: str = "") -> dict:
-    """
-    Query a Vertex AI RAG corpus and return a structured result.
-
-    Args:
-        corpus_name: Display name or full resource name of the corpus.
-        query_text:  Natural-language question.
-
-    Returns:
-        Dict with keys:
-        - status        : "success" | "error"
-        - answer        : Generated answer text
-        - sources       : List of {title, uri} dicts
-        - elapsed_s     : Wall-clock time in seconds
-        - corpus_name   : Echo of input
-    """
-    _init_vertex()
-    from vertexai import rag
-    from vertexai.generative_models import GenerativeModel, Tool
-    from rag_agent.config import DEFAULT_TOP_K, DEFAULT_DISTANCE_THRESHOLD
-    from rag_agent.tools.utils import get_corpus_resource_name
-    from rag_agent.config import MODEL as GENERATION_MODEL, GENERATION_SYSTEM_PROMPT
-
-    t0 = time.perf_counter()
-    try:
-        corpus_resource_name = get_corpus_resource_name(corpus_name)
-
-        rag_store = rag.VertexRagStore(
-            rag_resources=[rag.RagResource(rag_corpus=corpus_resource_name)],
-            rag_retrieval_config=rag.RagRetrievalConfig(
-                top_k=DEFAULT_TOP_K,
-                filter=rag.utils.resources.Filter(
-                    vector_distance_threshold=DEFAULT_DISTANCE_THRESHOLD
-                ),
-            ),
-        )
-
-        rag_retrieval_tool = Tool.from_retrieval(
-            retrieval=rag.Retrieval(source=rag_store)
-        )
-        if not retrieval_query:
-            from shared.query_rewriter import rewrite_query
-            retrieval_query = rewrite_query(query_text, context=context)
-
-        model = GenerativeModel(
-            model_name=GENERATION_MODEL,
-            tools=[rag_retrieval_tool],
-            system_instruction=GENERATION_SYSTEM_PROMPT,
-        )
-        response = model.generate_content(retrieval_query)
-
-        answer = response.text if hasattr(response, "text") else ""
-
-        sources: list[dict] = []
-        if response.candidates and response.candidates[0].grounding_metadata:
-            seen_uris: set[str] = set()
-            for chunk in response.candidates[0].grounding_metadata.grounding_chunks:
-                ctx   = getattr(chunk, "retrieved_context", None)
-                uri   = getattr(ctx, "uri",   None) if ctx else None
-                title = getattr(ctx, "title", "Document sans titre") if ctx else "Document sans titre"
-                if uri and uri not in seen_uris:
-                    seen_uris.add(uri)
-                    sources.append({"title": title, "uri": uri})
-
-        return {
-            "status":      "success",
-            "answer":      answer,
-            "sources":     sources,
-            "elapsed_s":   round(time.perf_counter() - t0, 2),
-            "corpus_name": corpus_name,
-        }
-
-    except Exception as exc:
-        return {
-            "status":      "error",
-            "message":     str(exc),
-            "answer":      "",
-            "sources":     [],
-            "elapsed_s":   round(time.perf_counter() - t0, 2),
-            "corpus_name": corpus_name,
         }

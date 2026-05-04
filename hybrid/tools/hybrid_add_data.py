@@ -30,7 +30,12 @@ from hybrid.config import (
 )
 from hybrid.stores import get_store
 from hybrid.embeddings import get_embedding_model
-from hybrid.ingestion.extractor import list_drive_folder, list_drive_tree, extract_from_url
+from hybrid.ingestion.extractor import (
+    list_drive_folder,
+    list_drive_tree,
+    extract_from_url,
+    extract_chunks,
+)
 from hybrid.ingestion.chunker import chunk_text
 from hybrid.ingestion.metadata import build_metadata
 
@@ -209,33 +214,26 @@ def hybrid_add_data(
 
             print(f"[hybrid_add_data]   Processing ({files_processed + 1}): {file_name}")
             try:
-                # 1. Extract text (truncate to protect against huge files)
-                print(f"[hybrid_add_data]      Extracting text…")
-                text = extract_from_url(url, drive_service)
-                if not text.strip():
+                # 1. Extract + chunk (structure-aware for xlsx, plain text otherwise)
+                print(f"[hybrid_add_data]      Extracting…")
+                chunks, sample = extract_chunks(
+                    file_info,
+                    drive_service,
+                    chunk_strategy=chunk_strategy,
+                    chunk_params=chunk_params,
+                    max_chars=_MAX_FILE_CHARS,
+                )
+                if not chunks:
                     print(f"[hybrid_add_data]      WARN Empty content - skipped")
                     files_skipped.append(
                         {"file": file_info["file_name"], "reason": "empty content"}
                     )
                     continue
 
-                if len(text) > _MAX_FILE_CHARS:
-                    text = text[:_MAX_FILE_CHARS]
-
-                # 2. Chunk
-                chunks = chunk_text(text, strategy=chunk_strategy, **chunk_params)
-                if not chunks:
-                    print(f"[hybrid_add_data]      WARN No chunks produced - skipped")
-                    files_skipped.append(
-                        {"file": file_info["file_name"], "reason": "no chunks produced"}
-                    )
-                    continue
-
-                # Detect language and domain ONCE on the full document text
+                # Detect language and domain ONCE on a sample of the document
                 from hybrid.ingestion.metadata import detect_language, detect_domaine
-                _sample = text[:5000]
-                doc_language = detect_language(_sample)
-                doc_domaine  = detect_domaine(_sample, file_info.get("file_name", ""))
+                doc_language = detect_language(sample)
+                doc_domaine  = detect_domaine(sample, file_info.get("file_name", ""))
 
                 print(f"[hybrid_add_data]      Chunked → {len(chunks)} chunks | {doc_domaine}/{doc_language} | Embedding…")
 
@@ -551,19 +549,18 @@ def hybrid_add_data_auto(
 
                 print(f"[auto]   Processing: {file_name}")
                 try:
-                    text = extract_from_url(url, drive_service)
-                    if not text.strip():
-                        continue
-                    if len(text) > _MAX_FILE_CHARS:
-                        text = text[:_MAX_FILE_CHARS]
-
-                    chunks = chunk_text(text, strategy=chunk_strategy, **chunk_params)
+                    chunks, sample = extract_chunks(
+                        file_info,
+                        drive_service,
+                        chunk_strategy=chunk_strategy,
+                        chunk_params=chunk_params,
+                        max_chars=_MAX_FILE_CHARS,
+                    )
                     if not chunks:
                         continue
 
                     from hybrid.ingestion.metadata import detect_language
-                    _sample = text[:5000]
-                    doc_language = detect_language(_sample)
+                    doc_language = detect_language(sample)
                     # Use the notion folder name as domaine instead of keyword detection.
                     # When notion is empty (files at L1), fall back to the company name.
                     doc_domaine = (notion or company).upper()

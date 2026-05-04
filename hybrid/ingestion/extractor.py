@@ -173,6 +173,298 @@ def extract_from_docx(file_id: str, drive_service: Any) -> str:
     return "\n\n".join(lines)
 
 
+# ── Tabular helpers (xlsx structure-aware chunking) ─────────────────────────
+
+
+def _clean_cell(value: Any) -> str:
+    """Render a cell value as plain text — empty cells become ``""``."""
+    if value is None:
+        return ""
+    s = str(value).strip()
+    # Markdown table-cell guard: pipes break the row layout, newlines split the row
+    return s.replace("|", "/").replace("\n", " ").replace("\r", " ")
+
+
+def _detect_header_row(rows: list[list[Any]], max_scan: int = 20) -> int:
+    """
+    Heuristically detect the most likely header row in ``rows``.
+
+    A row is considered a header if:
+    - at least 50% of its cells are non-empty, AND
+    - at least 70% of those non-empty cells are strings (not numbers/dates).
+
+    Bonus: if the next row is majority numeric, the match is confirmed.
+
+    Returns:
+        0-based index of the detected header row, or 0 if no row qualifies.
+    """
+    for i, row in enumerate(rows[: max_scan]):
+        n_total = len(row)
+        non_empty = [c for c in row if c is not None and str(c).strip()]
+        if n_total == 0 or len(non_empty) < max(2, n_total * 0.5):
+            continue
+        text_count = sum(1 for c in non_empty if isinstance(c, str))
+        if text_count < len(non_empty) * 0.7:
+            continue
+        # Bonus check on the next row
+        if i + 1 < len(rows):
+            next_non_empty = [c for c in rows[i + 1] if c is not None]
+            if next_non_empty:
+                numeric = sum(
+                    1 for c in next_non_empty if isinstance(c, (int, float))
+                )
+                if numeric / max(len(next_non_empty), 1) > 0.5:
+                    return i
+        return i
+    return 0
+
+
+def _split_regions(
+    rows: list[list[Any]], blank_threshold: int = 2
+) -> list[tuple[int, list[list[Any]]]]:
+    """
+    Split a sheet into contiguous regions separated by ``blank_threshold``
+    or more consecutive blank rows. Each region is a sub-table.
+
+    Returns:
+        List of ``(offset_in_original, region_rows)`` tuples.
+    """
+    regions: list[tuple[int, list[list[Any]]]] = []
+    current: list[list[Any]] = []
+    blank_count = 0
+    region_start = 0
+    for i, row in enumerate(rows):
+        is_blank = all(c is None or str(c).strip() == "" for c in row)
+        if is_blank:
+            blank_count += 1
+            if blank_count >= blank_threshold and current:
+                regions.append((region_start, current))
+                current = []
+        else:
+            if not current:
+                region_start = i
+            blank_count = 0
+            current.append(row)
+    if current:
+        regions.append((region_start, current))
+    return regions
+
+
+def _forward_fill(header: list[str]) -> list[str]:
+    """
+    Forward-fill empty header cells with the previous non-empty value.
+    Handles merged-cell headers where openpyxl returns ``None`` for the
+    second cell of the merge.
+    """
+    out: list[str] = []
+    last = ""
+    for h in header:
+        if h.strip():
+            last = h
+        out.append(last or h)
+    return out
+
+
+def _format_chunk_md(
+    sheet_name: str,
+    header: list[str],
+    block_rows: list[list[Any]],
+    row_start_excel: int,
+    row_end_excel: int,
+) -> str:
+    """Format a header + data block as a markdown table prefixed with location info."""
+    safe_header = [_clean_cell(c) for c in header]
+    n_cols = len(safe_header)
+
+    lines = [
+        f"=== {sheet_name} (lignes {row_start_excel}-{row_end_excel}) ===",
+        "",
+    ]
+    if n_cols:
+        lines.append("| " + " | ".join(safe_header) + " |")
+        lines.append("| " + " | ".join("---" for _ in safe_header) + " |")
+    for row in block_rows:
+        cells = [_clean_cell(c) for c in row]
+        if n_cols:
+            # Pad / truncate to header width to keep markdown rows aligned
+            cells = (cells + [""] * n_cols)[: n_cols]
+        if any(c.strip() for c in cells):
+            lines.append("| " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+_XLSX_MIMES: set[str] = {
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+}
+
+
+def extract_chunks(
+    file_info: dict,
+    drive_service: Any,
+    chunk_strategy: str = "fixed",
+    chunk_params: dict | None = None,
+    max_chars: int = 0,
+) -> tuple[list[dict], str]:
+    """
+    Unified extraction + chunking dispatcher for the ingestion pipeline.
+
+    - ``.xlsx`` / ``.xls`` → structure-aware chunks (one chunk per row block,
+      header always repeated, location prefix in the content).
+    - All other formats → text extract + ``chunk_text`` with the requested
+      chunk strategy.
+
+    Args:
+        file_info:      FileInfo dict (must contain ``source_url``, ``mime_type``,
+                        ``file_id``).
+        drive_service:  Authenticated Drive API service.
+        chunk_strategy: Chunk strategy for non-tabular files (passed to chunker).
+        chunk_params:   Chunk strategy parameters.
+        max_chars:      Optional truncation cap for non-tabular text. ``0`` = no cap.
+
+    Returns:
+        ``(chunks, sample_text)``. ``sample_text`` is a small excerpt suitable
+        for language / domain detection (empty if no chunks were produced).
+    """
+    from hybrid.ingestion.chunker import chunk_text
+
+    mime = file_info.get("mime_type", "")
+    file_id = file_info.get("file_id", "")
+    url = file_info.get("source_url", "")
+
+    if mime in _XLSX_MIMES and file_id:
+        chunks = extract_xlsx_chunks(file_id, drive_service, mime_type=mime)
+        if not chunks:
+            return [], ""
+        return chunks, chunks[0].get("content", "")[:5000]
+
+    text = extract_from_url(url, drive_service)
+    if not text.strip():
+        return [], ""
+    if max_chars and len(text) > max_chars:
+        text = text[:max_chars]
+    chunks = chunk_text(text, strategy=chunk_strategy, **(chunk_params or {}))
+    return chunks, text[:5000]
+
+
+def extract_xlsx_chunks(
+    file_id: str,
+    drive_service: Any,
+    mime_type: str = "",
+    rows_per_chunk: int = 30,
+) -> list[dict]:
+    """
+    Structure-aware chunking for ``.xlsx`` and legacy ``.xls`` files.
+
+    Each returned chunk:
+    - Always carries the column header(s) at the top, so the LLM and the
+      embedding model can interpret cell values correctly.
+    - Covers a contiguous block of ``rows_per_chunk`` data rows from a
+      single sheet region (sub-tables separated by blank rows are handled
+      independently).
+    - Is rendered as a markdown table prefixed with a location header
+      ``=== Feuil1 (lignes 11-40) ===`` so the user reading the chunk
+      panel knows exactly where the data lives in the source file.
+
+    Args:
+        file_id:        Google Drive file ID.
+        drive_service:  Authenticated Drive service.
+        mime_type:      MIME hint (``application/vnd.ms-excel`` for legacy ``.xls``).
+        rows_per_chunk: Number of data rows per chunk (default 30).
+
+    Returns:
+        List of dicts compatible with the ingestion pipeline:
+        ``id``, ``content``, ``chunk_index``, ``chunk_total``,
+        ``chunk_strategy = "xlsx_structured"``, ``parent_chunk_id = None``.
+    """
+    import uuid
+
+    request = drive_service.files().get_media(fileId=file_id, supportsAllDrives=True)
+    buf = io.BytesIO(request.execute())
+
+    sheets: list[tuple[str, list[list[Any]]]] = []
+    is_legacy_xls = mime_type == "application/vnd.ms-excel"
+
+    if not is_legacy_xls:
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(buf, read_only=True, data_only=True)
+            for sh in wb.worksheets:
+                rows = [list(r) for r in sh.iter_rows(values_only=True)]
+                sheets.append((sh.title, rows))
+            wb.close()
+        except Exception:
+            buf.seek(0)
+            sheets = []  # fall through to pandas
+
+    if not sheets:
+        # Legacy .xls or openpyxl failure → pandas (xlrd for binary, openpyxl for OOXML)
+        import pandas as pd
+        all_sheets = pd.read_excel(buf, sheet_name=None, dtype=object, header=None)
+        for name, df in all_sheets.items():
+            df = df.where(df.notna(), None)
+            sheets.append((str(name), df.values.tolist()))
+
+    # Pre-compute totals so each chunk can carry chunk_total
+    pending_chunks: list[dict] = []
+
+    for sheet_name, rows in sheets:
+        if not rows:
+            continue
+        regions = _split_regions(rows)
+        for region_offset, region_rows in regions:
+            if not region_rows:
+                continue
+            header_idx = _detect_header_row(region_rows)
+            header = [_clean_cell(c) for c in region_rows[header_idx]]
+            header = _forward_fill(header)
+            data_rows = region_rows[header_idx + 1 :]
+            if not data_rows:
+                # Header only — store the header itself as a single chunk so the
+                # row labels are still searchable.
+                excel_row = region_offset + header_idx + 1
+                pending_chunks.append({
+                    "_sheet":    sheet_name,
+                    "_start":    excel_row,
+                    "_end":      excel_row,
+                    "_header":   header,
+                    "_data":     [],
+                })
+                continue
+            for i in range(0, len(data_rows), rows_per_chunk):
+                block = data_rows[i : i + rows_per_chunk]
+                # Excel rows are 1-indexed: data starts at
+                # region_offset (0-based row in the original sheet)
+                # + header_idx + 1 (after the header row)
+                # + i (offset inside data_rows)
+                # + 1 (1-indexing)
+                row_start_excel = region_offset + header_idx + 1 + i + 1
+                row_end_excel   = region_offset + header_idx + 1 + i + len(block)
+                pending_chunks.append({
+                    "_sheet":    sheet_name,
+                    "_start":    row_start_excel,
+                    "_end":      row_end_excel,
+                    "_header":   header,
+                    "_data":     block,
+                })
+
+    total = len(pending_chunks)
+    final_chunks: list[dict] = []
+    for idx, c in enumerate(pending_chunks):
+        content = _format_chunk_md(
+            c["_sheet"], c["_header"], c["_data"], c["_start"], c["_end"]
+        )
+        final_chunks.append({
+            "id":               str(uuid.uuid4()),
+            "content":          content,
+            "chunk_index":      idx,
+            "chunk_total":      total,
+            "chunk_strategy":   "xlsx_structured",
+            "parent_chunk_id":  None,
+        })
+    return final_chunks
+
+
 def extract_from_xlsx(file_id: str, drive_service: Any, mime_type: str = "") -> str:
     """
     Download and extract text from a .xlsx or legacy .xls file.

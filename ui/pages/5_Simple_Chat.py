@@ -240,6 +240,12 @@ user_input = st.chat_input(_placeholder)
 
 if user_input:
     from services.chat_store import sc_append_message
+    from rag_agent.runtime_context import set_user_role
+
+    # The dense pipeline reads runtime_context.user_role on the calling
+    # thread to filter the candidate index list. Without this, the default
+    # ("agent") would apply and block everything for users with broader roles.
+    set_user_role(USER_ROLE)
 
     sid     = _active_sid()
     context = _build_context()

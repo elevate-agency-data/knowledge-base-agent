@@ -427,12 +427,13 @@ def extract_xlsx_chunks(
 
     sheets: list[tuple[str, list[list[Any]]]] = []
     is_legacy_xls = mime_type == "application/vnd.ms-excel"
+    HARD_ROW_CAP = 5_000  # any sane municipal sheet stays well below
+    openpyxl_failed = False
 
     if not is_legacy_xls:
         try:
             import openpyxl
             wb = openpyxl.load_workbook(buf, read_only=True, data_only=True)
-            HARD_ROW_CAP = 5_000  # any sane municipal sheet stays well below
             for sh in wb.worksheets:
                 rows: list[list[Any]] = []
                 hit_cap = False
@@ -444,19 +445,23 @@ def extract_xlsx_chunks(
                 if hit_cap:
                     print(
                         f"[xlsx] WARN sheet '{sh.title}' truncated at "
-                        f"{HARD_ROW_CAP} rows — increase HARD_ROW_CAP if "
-                        f"the data actually exceeds that limit."
+                        f"{HARD_ROW_CAP} rows — raise HARD_ROW_CAP if needed."
                     )
                 sheets.append((sh.title, rows))
             wb.close()
-        except Exception:
+        except Exception as exc:
+            print(f"[xlsx] openpyxl failed ({exc}) — falling back to pandas")
+            openpyxl_failed = True
             buf.seek(0)
-            sheets = []  # fall through to pandas
+            sheets = []
 
-    if not sheets:
-        # Legacy .xls or openpyxl failure → pandas (xlrd for binary, openpyxl for OOXML)
+    # pandas fallback only when openpyxl failed or we know it's legacy .xls
+    if is_legacy_xls or openpyxl_failed:
         import pandas as pd
-        all_sheets = pd.read_excel(buf, sheet_name=None, dtype=object, header=None)
+        all_sheets = pd.read_excel(
+            buf, sheet_name=None, dtype=object, header=None,
+            nrows=HARD_ROW_CAP,
+        )
         for name, df in all_sheets.items():
             df = df.where(df.notna(), None)
             sheets.append((str(name), df.values.tolist()))

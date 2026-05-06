@@ -552,13 +552,29 @@ def hybrid_add_data_auto(
 
                 print(f"[auto]   Processing: {file_name}")
                 try:
-                    chunks, sample = extract_chunks(
-                        file_info,
-                        drive_service,
-                        chunk_strategy=chunk_strategy,
-                        chunk_params=chunk_params,
-                        max_chars=_MAX_FILE_CHARS,
-                    )
+                    # Run extraction with a per-file timeout — a single
+                    # malformed xlsx (formula loops, embedded objects,
+                    # huge ghost ranges that escape the row cap) used to
+                    # hang the whole ingestion loop indefinitely.
+                    from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout
+                    _PER_FILE_TIMEOUT_S = 180
+                    with ThreadPoolExecutor(max_workers=1) as _pool:
+                        _fut = _pool.submit(
+                            extract_chunks,
+                            file_info, drive_service,
+                            chunk_strategy=chunk_strategy,
+                            chunk_params=chunk_params,
+                            max_chars=_MAX_FILE_CHARS,
+                        )
+                        try:
+                            chunks, sample = _fut.result(timeout=_PER_FILE_TIMEOUT_S)
+                        except _Timeout:
+                            print(
+                                f"[auto]   TIMEOUT after {_PER_FILE_TIMEOUT_S}s "
+                                f"on {file_name} — skipped (worker thread "
+                                f"leaks but loop continues)."
+                            )
+                            continue
                     if not chunks:
                         continue
 

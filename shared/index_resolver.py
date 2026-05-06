@@ -185,6 +185,8 @@ def resolve_indexes(query: str, available: list[str]) -> list[str]:
         print(f"#### la reponse de flash : {response.text} #####")
         names    = [n.strip().lower() for n in response.text.strip().split(",")]
         resolved = expand_company_indexes(names, available)
+        resolved = _augment_resolution(query, resolved, available)
+        print(f"#### resolved (after augment): {resolved} #####")
         return resolved if resolved else available
     except Exception:
         # Substring fallback
@@ -198,6 +200,61 @@ def resolve_indexes(query: str, available: list[str]) -> list[str]:
                     matched.append(a)
         matched = expand_company_indexes(matched, available) if matched else []
         return matched if matched else available
+
+
+# Pilotage / tableaux-de-bord indexes aggregate cross-domain data and are
+# always added on top of whatever Flash returns. Flash routinely misses
+# them because their label vocabulary does not match RH / finance /
+# patrimoine domain keywords.
+_PILOTAGE_LABELS = (
+    "pilotage", "tableaux de pilotage", "tableaux-de-pilotage",
+    "tableau de pilotage", "indicateurs", "suivi",
+)
+
+# Boundary topics that genuinely span two domains — when triggered we add
+# both sides regardless of what Flash returned.
+_BOUNDARY_RULES: list[tuple[tuple[str, ...], tuple[str, ...]]] = [
+    (("charges patronales", "cotisations sociales", "masse salariale brute",
+      "masse salariale", "salaires bruts", "salaires nets", "primes",
+      "ijss", "taxe sur salaires"),
+     ("rh", "personnel", "finance", "comptable", "financière", "financier")),
+    (("travaux énergie", "rénovation thermique", "énergétique"),
+     ("patrimoine", "maintenance", "énergie", "finance", "comptable")),
+]
+
+
+def _augment_resolution(
+    query: str, resolved: list[str], available: list[str]
+) -> list[str]:
+    """
+    Force-inject indexes Flash tends to miss:
+    - Pilotage / tableaux de bord / suivi — ALWAYS injected. These
+      dashboards aggregate cross-domain data and are routinely missed
+      by Flash because their domain label does not match RH / finance
+      / patrimoine vocabulary.
+    - Both sides of a boundary topic (charges patronales -> RH AND
+      finance, etc.) when its trigger words appear in the query.
+    """
+    q = query.lower()
+    out: list[str] = list(resolved)
+    seen: set[str] = set(out)
+
+    def _add_indexes_matching(label_keywords: tuple[str, ...]) -> None:
+        for idx in available:
+            il = idx.lower()
+            if any(kw in il for kw in label_keywords) and idx not in seen:
+                out.append(idx)
+                seen.add(idx)
+
+    # Pilotage injection — systematic, every query gets the dashboards.
+    _add_indexes_matching(_PILOTAGE_LABELS)
+
+    # Boundary topics
+    for triggers, label_keywords in _BOUNDARY_RULES:
+        if any(t in q for t in triggers):
+            _add_indexes_matching(label_keywords)
+
+    return out
 
 
 def _describe_hierarchy(available: list[str]) -> str:

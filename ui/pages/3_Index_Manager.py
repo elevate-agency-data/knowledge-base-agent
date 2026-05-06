@@ -205,7 +205,7 @@ with tab_tree:
 
         # ── Summary KPIs ─────────────────────────────────────────────────
         kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-        kpi1.metric("Communes", len(grouped))
+        kpi1.metric("Domaines", len(grouped))
         kpi2.metric("Categories", len(all_indexes))
         kpi3.metric("Documents", grand_total_files)
         kpi4.metric("Text segments", grand_total_chunks)

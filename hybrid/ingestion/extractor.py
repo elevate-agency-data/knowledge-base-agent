@@ -432,8 +432,21 @@ def extract_xlsx_chunks(
         try:
             import openpyxl
             wb = openpyxl.load_workbook(buf, read_only=True, data_only=True)
+            HARD_ROW_CAP = 5_000  # any sane municipal sheet stays well below
             for sh in wb.worksheets:
-                rows = [list(r) for r in sh.iter_rows(values_only=True)]
+                rows: list[list[Any]] = []
+                hit_cap = False
+                for idx, r in enumerate(sh.iter_rows(values_only=True)):
+                    if idx >= HARD_ROW_CAP:
+                        hit_cap = True
+                        break
+                    rows.append(list(r))
+                if hit_cap:
+                    print(
+                        f"[xlsx] WARN sheet '{sh.title}' truncated at "
+                        f"{HARD_ROW_CAP} rows — increase HARD_ROW_CAP if "
+                        f"the data actually exceeds that limit."
+                    )
                 sheets.append((sh.title, rows))
             wb.close()
         except Exception:

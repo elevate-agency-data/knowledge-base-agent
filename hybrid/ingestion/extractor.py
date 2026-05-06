@@ -272,24 +272,51 @@ def _format_chunk_md(
     row_start_excel: int,
     row_end_excel: int,
 ) -> str:
-    """Format a header + data block as a markdown table prefixed with location info."""
+    """
+    Render a header + data block as a list of key-value records.
+
+    Each row becomes one line of the form::
+
+        ligne 12 — Service: Stade Nautique | Catégorie: Charges patronales | 2022: 12345
+
+    This format is friendlier to embeddings than a markdown ASCII table:
+    the column label sits right next to its value in the same short
+    context, so semantic queries like
+    ``"charges patronales du Service Stade Nautique 2022"`` retrieve
+    the right chunk reliably. The leading ``=== Sheet (lignes X-Y) ===``
+    keeps location info visible in both the chunk panel and the LLM
+    prompt.
+    """
     safe_header = [_clean_cell(c) for c in header]
     n_cols = len(safe_header)
 
-    lines = [
-        f"=== {sheet_name} (lignes {row_start_excel}-{row_end_excel}) ===",
-        "",
-    ]
-    if n_cols:
-        lines.append("| " + " | ".join(safe_header) + " |")
-        lines.append("| " + " | ".join("---" for _ in safe_header) + " |")
-    for row in block_rows:
+    lines = [f"=== {sheet_name} (lignes {row_start_excel}-{row_end_excel}) ==="]
+    if n_cols and any(h.strip() for h in safe_header):
+        lines.append("Colonnes : " + ", ".join(h for h in safe_header if h.strip()))
+    lines.append("")
+
+    for i, row in enumerate(block_rows):
         cells = [_clean_cell(c) for c in row]
         if n_cols:
-            # Pad / truncate to header width to keep markdown rows aligned
             cells = (cells + [""] * n_cols)[: n_cols]
-        if any(c.strip() for c in cells):
-            lines.append("| " + " | ".join(cells) + " |")
+        if not any(c.strip() for c in cells):
+            continue
+        excel_row = row_start_excel + i
+
+        if n_cols and any(h.strip() for h in safe_header):
+            pairs = [
+                f"{h.strip()}: {c}"
+                for h, c in zip(safe_header, cells)
+                if h.strip() and c.strip()
+            ]
+            if not pairs:
+                continue
+            lines.append(f"ligne {excel_row} — " + " | ".join(pairs))
+        else:
+            lines.append(
+                f"ligne {excel_row} — " + " | ".join(c for c in cells if c.strip())
+            )
+
     return "\n".join(lines)
 
 
@@ -336,6 +363,16 @@ def extract_chunks(
         chunks = extract_xlsx_chunks(file_id, drive_service, mime_type=mime)
         if not chunks:
             return [], ""
+        # Inject the file name into both the LLM-facing body AND the
+        # embedding-only text so semantic queries that mention a topic
+        # only present in the file title still retrieve the chunk.
+        fname = file_info.get("file_name", "")
+        if fname:
+            head = f"Fichier : {fname}"
+            for c in chunks:
+                c["content"] = f"{head}\n\n{c['content']}"
+                if c.get("embedding_text"):
+                    c["embedding_text"] = f"{head}\n{c['embedding_text']}"
         return chunks, chunks[0].get("content", "")[:5000]
 
     text = extract_from_url(url, drive_service)
@@ -351,31 +388,37 @@ def extract_xlsx_chunks(
     file_id: str,
     drive_service: Any,
     mime_type: str = "",
-    rows_per_chunk: int = 30,
+    max_rows_per_chunk: int = 30,
+    max_chunk_body_chars: int = 8000,
 ) -> list[dict]:
     """
     Structure-aware chunking for ``.xlsx`` and legacy ``.xls`` files.
 
-    Each returned chunk:
-    - Always carries the column header(s) at the top, so the LLM and the
-      embedding model can interpret cell values correctly.
-    - Covers a contiguous block of ``rows_per_chunk`` data rows from a
-      single sheet region (sub-tables separated by blank rows are handled
-      independently).
-    - Is rendered as a markdown table prefixed with a location header
-      ``=== Feuil1 (lignes 11-40) ===`` so the user reading the chunk
-      panel knows exactly where the data lives in the source file.
+    Strategy: **one chunk per sheet region** (a contiguous block of rows
+    not separated by blank rows). Each chunk holds the full table — the
+    dense embedding stays compact (file name + sheet + columns +
+    preamble, *no values*) so it does not blow past the embedding-model
+    token budget regardless of table size. The full body, including
+    every row and value, lives in ``content`` and is what the LLM reads
+    and what BM25 indexes for exact-term matching.
+
+    The two-channel design lets us:
+    - keep ONE embedding per table no matter how many rows it has,
+    - retain exact-term precision (years, references, row labels) via
+      the sparse pipeline,
+    - inject the entire matched table into the LLM prompt so it can
+      find any cell value the query asks about.
 
     Args:
         file_id:        Google Drive file ID.
         drive_service:  Authenticated Drive service.
         mime_type:      MIME hint (``application/vnd.ms-excel`` for legacy ``.xls``).
-        rows_per_chunk: Number of data rows per chunk (default 30).
 
     Returns:
         List of dicts compatible with the ingestion pipeline:
-        ``id``, ``content``, ``chunk_index``, ``chunk_total``,
-        ``chunk_strategy = "xlsx_structured"``, ``parent_chunk_id = None``.
+        ``id``, ``content``, ``embedding_text``, ``chunk_index``,
+        ``chunk_total``, ``chunk_strategy = "xlsx_structured"``,
+        ``parent_chunk_id = None``.
     """
     import uuid
 
@@ -405,64 +448,157 @@ def extract_xlsx_chunks(
             df = df.where(df.notna(), None)
             sheets.append((str(name), df.values.tolist()))
 
-    # Pre-compute totals so each chunk can carry chunk_total
-    pending_chunks: list[dict] = []
+    pending: list[dict] = []
 
     for sheet_name, rows in sheets:
         if not rows:
             continue
-        regions = _split_regions(rows)
-        for region_offset, region_rows in regions:
+        for region_offset, region_rows in _split_regions(rows):
             if not region_rows:
                 continue
             header_idx = _detect_header_row(region_rows)
-            header = [_clean_cell(c) for c in region_rows[header_idx]]
-            header = _forward_fill(header)
+            header = _forward_fill([_clean_cell(c) for c in region_rows[header_idx]])
             data_rows = region_rows[header_idx + 1 :]
+
+            # Drop trailing all-blank rows — openpyxl can yield ghost rows
+            # (formatting-only cells) up to the sheet's nominal row limit.
+            while data_rows and all(
+                c is None or str(c).strip() == "" for c in data_rows[-1]
+            ):
+                data_rows = data_rows[:-1]
+
+            # Free-text preamble = rows above the detected header
+            preamble_lines: list[str] = []
+            for r in region_rows[: header_idx]:
+                cells = [_clean_cell(c) for c in r if c is not None]
+                cells = [c for c in cells if c.strip()]
+                if cells:
+                    preamble_lines.append(" ".join(cells))
+            preamble = " — ".join(preamble_lines)
+
+            data_offset_excel = region_offset + header_idx + 1 + 1  # first data row, 1-indexed
+
             if not data_rows:
-                # Header only — store the header itself as a single chunk so the
-                # row labels are still searchable.
-                excel_row = region_offset + header_idx + 1
-                pending_chunks.append({
+                pending.append({
                     "_sheet":    sheet_name,
-                    "_start":    excel_row,
-                    "_end":      excel_row,
                     "_header":   header,
                     "_data":     [],
+                    "_preamble": preamble,
+                    "_start":    region_offset + header_idx + 1,
+                    "_end":      region_offset + header_idx + 1,
                 })
                 continue
-            for i in range(0, len(data_rows), rows_per_chunk):
-                block = data_rows[i : i + rows_per_chunk]
-                # Excel rows are 1-indexed: data starts at
-                # region_offset (0-based row in the original sheet)
-                # + header_idx + 1 (after the header row)
-                # + i (offset inside data_rows)
-                # + 1 (1-indexing)
-                row_start_excel = region_offset + header_idx + 1 + i + 1
-                row_end_excel   = region_offset + header_idx + 1 + i + len(block)
-                pending_chunks.append({
+
+            # Adaptive packing: pack rows up to BOTH max_rows_per_chunk AND
+            # max_chunk_body_chars (greedy). Wide rows (dashboards with 30+
+            # cols) trigger smaller blocks; narrow rows fill up to the row cap.
+            # No data is lost — over-cap rows go into the next sub-chunk
+            # rather than being truncated.
+            i = 0
+            n = len(data_rows)
+            while i < n:
+                block: list[list[Any]] = []
+                block_chars = _estimate_overhead_chars(
+                    sheet_name, header, preamble
+                )
+                while i < n and len(block) < max_rows_per_chunk:
+                    rc = _estimate_record_chars(header, data_rows[i])
+                    if block and block_chars + rc > max_chunk_body_chars:
+                        break
+                    block.append(data_rows[i])
+                    block_chars += rc
+                    i += 1
+                if not block:
+                    # Single row exceeds the cap on its own — accept it whole;
+                    # the row count will be 1 but we never lose data.
+                    block.append(data_rows[i])
+                    i += 1
+                pending.append({
                     "_sheet":    sheet_name,
-                    "_start":    row_start_excel,
-                    "_end":      row_end_excel,
                     "_header":   header,
                     "_data":     block,
+                    "_preamble": preamble,
+                    "_start":    data_offset_excel + (i - len(block)),
+                    "_end":      data_offset_excel + i - 1,
                 })
 
-    total = len(pending_chunks)
+    total = len(pending)
     final_chunks: list[dict] = []
-    for idx, c in enumerate(pending_chunks):
-        content = _format_chunk_md(
+    for idx, c in enumerate(pending):
+        body = _format_chunk_md(
             c["_sheet"], c["_header"], c["_data"], c["_start"], c["_end"]
         )
+        if c["_preamble"]:
+            body = f"Préambule : {c['_preamble']}\n\n{body}"
+        # Adaptive packing already keeps the body within max_chunk_body_chars
+        # whenever possible. The only case where it can still go over is a
+        # single row larger than the cap on its own; we keep it untruncated
+        # so no data is lost.
+        # The dense embedding only uses the column-level summary (no row
+        # values) — the body is what BM25 indexes and what the LLM reads.
+        embedding_text = _format_table_summary(
+            c["_sheet"], c["_header"], c["_preamble"], file_name="",
+        )
         final_chunks.append({
-            "id":               str(uuid.uuid4()),
-            "content":          content,
-            "chunk_index":      idx,
-            "chunk_total":      total,
-            "chunk_strategy":   "xlsx_structured",
-            "parent_chunk_id":  None,
+            "id":              str(uuid.uuid4()),
+            "content":         body,
+            "embedding_text":  embedding_text,
+            "chunk_index":     idx,
+            "chunk_total":     total,
+            "chunk_strategy":  "xlsx_structured",
+            "parent_chunk_id": None,
         })
     return final_chunks
+
+
+def _estimate_record_chars(header: list[str], row: list[Any]) -> int:
+    """Approximate length of a 'ligne X — h: v | h: v ...' line."""
+    total = 12  # 'ligne XXXX — '
+    for h, c in zip(header, row):
+        cv = "" if c is None else str(c)
+        total += len(h) + len(cv) + 5  # 'h: cv | '
+    return total
+
+
+def _estimate_overhead_chars(
+    sheet_name: str,
+    header: list[str],
+    preamble: str,
+) -> int:
+    """Approximate fixed overhead per chunk (filename injected later in extract_chunks)."""
+    overhead = 30  # '=== sheet (lignes X-Y) ==='
+    overhead += len(sheet_name)
+    if preamble:
+        overhead += len(preamble) + 15  # 'Préambule : ...\n\n'
+    if any(h.strip() for h in header):
+        overhead += sum(len(h) for h in header) + len(header) * 2 + 15
+    return overhead
+
+
+def _format_table_summary(
+    sheet_name: str,
+    header: list[str],
+    preamble: str,
+    file_name: str,
+) -> str:
+    """
+    Compact column-level summary used **only** for the dense embedding.
+
+    Drops every cell value (including textual labels) — the row data
+    lives in ``chunk['content']`` and is matched by BM25 / served to
+    the LLM. The dense vector therefore captures *what the table is
+    about*, not *what numbers it contains*.
+    """
+    parts: list[str] = []
+    if file_name:
+        parts.append(f"Fichier : {file_name}")
+    if preamble:
+        parts.append(f"Préambule : {preamble}")
+    parts.append(f"Feuille : {sheet_name}")
+    safe_header = [h for h in (_clean_cell(c) for c in header) if h]
+    if safe_header:
+        parts.append("Colonnes : " + ", ".join(safe_header))
+    return "\n".join(parts)
 
 
 def extract_from_xlsx(file_id: str, drive_service: Any, mime_type: str = "") -> str:

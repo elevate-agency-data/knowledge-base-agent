@@ -237,8 +237,11 @@ def hybrid_add_data(
 
                 print(f"[hybrid_add_data]      Chunked → {len(chunks)} chunks | {doc_domaine}/{doc_language} | Embedding…")
 
-                # 3. Embed in batches of 64 to limit memory pressure
-                texts = [c["content"] for c in chunks]
+                # 3. Embed in batches of 64 to limit memory pressure.
+                # Structure-aware extractors (xlsx) attach an "embedding_text"
+                # field with numeric values stripped — embed that one when
+                # present, otherwise fall back to the full content.
+                texts = [c.get("embedding_text") or c["content"] for c in chunks]
                 embeddings = _embed_in_batches(embedder, texts, batch_size=64)
 
                 # 4. Assemble metadata + attach embeddings
@@ -565,7 +568,9 @@ def hybrid_add_data_auto(
                     # When notion is empty (files at L1), fall back to the company name.
                     doc_domaine = (notion or company).upper()
 
-                    texts_to_embed = [c["content"] for c in chunks]
+                    texts_to_embed = [
+                        c.get("embedding_text") or c["content"] for c in chunks
+                    ]
                     embeddings = _embed_in_batches(embedder, texts_to_embed, batch_size=64)
 
                     records: list[dict] = []

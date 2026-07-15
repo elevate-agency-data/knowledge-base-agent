@@ -73,32 +73,52 @@ def _get_conn() -> sqlite3.Connection:
 
 
 # ── Bootstrap : admin par défaut à la première création de la BDD ─────────────
-
-# Toute BDD de marque fraîchement créée reçoit ce compte admin, sinon personne
-# ne peut se connecter. Identifiant volontairement simple pour le premier accès.
-_DEFAULT_ADMIN_EMAIL = "elevate"
-_DEFAULT_ADMIN_PASSWORD = "elevate2026"
-_DEFAULT_ADMIN_NAME = "Elevate"
+#
+# Les identifiants ne sont PAS en dur : ils viennent du .env (chargé par
+# ui/path_setup.py) / des variables d'environnement Cloud Run.
+#   DEFAULT_ADMIN_EMAIL     (défaut "elevate" — non secret)
+#   DEFAULT_ADMIN_NAME      (défaut "Elevate" — non secret)
+#   DEFAULT_ADMIN_PASSWORD  (AUCUN défaut — secret obligatoire, sinon pas de seed)
+#
+# Toute BDD de marque fraîchement créée reçoit ce compte admin (rôle owner de
+# la marque), sinon personne ne peut se connecter. Si le mot de passe n'est pas
+# défini dans l'environnement, le seed est ignoré (aucun secret codé en dur).
 
 
 def _ensure_default_admin(conn: sqlite3.Connection) -> None:
-    """Create the ``elevate`` admin on an empty user store (any brand)."""
+    """Create the bootstrap admin on an empty user store (any brand).
+
+    Credentials come from the environment (.env). No password → no seed.
+    """
     count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     if count:
         return
+
+    password = os.getenv("DEFAULT_ADMIN_PASSWORD")
+    if not password:
+        print(
+            "[auth] DEFAULT_ADMIN_PASSWORD non défini — pas de seed admin. "
+            "Renseigne-le dans rag_agent/.env (ou via env Cloud Run) puis "
+            "recrée la base, ou lance scripts/seed_admin.py."
+        )
+        return
+
+    email = os.getenv("DEFAULT_ADMIN_EMAIL", "elevate").lower().strip()
+    name = os.getenv("DEFAULT_ADMIN_NAME", "Elevate").strip()
     conn.execute(
         "INSERT INTO users (id, email, password_hash, display_name, created_at, is_admin, role) "
         "VALUES (?, ?, ?, ?, ?, 1, ?)",
         [
             str(uuid.uuid4()),
-            _DEFAULT_ADMIN_EMAIL,
-            _hash_password(_DEFAULT_ADMIN_PASSWORD),
-            _DEFAULT_ADMIN_NAME,
+            email,
+            _hash_password(password),
+            name,
             datetime.now().isoformat(),
             _OWNER_ROLE,
         ],
     )
     conn.commit()
+    print(f"[auth] Admin par défaut créé ({email}) pour la marque active.")
 
 
 # ── Hachage mot de passe ──────────────────────────────────────────────────────

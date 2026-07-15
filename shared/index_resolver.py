@@ -22,6 +22,8 @@ Used by:
 
 from __future__ import annotations
 
+from shared.brand import ACTIVE as _BRAND
+
 INDEX_SEP = "__"
 
 
@@ -130,42 +132,26 @@ def resolve_indexes(query: str, available: list[str]) -> list[str]:
     })
 
     prompt = (
-        f"You are an index resolver for a French city-hall knowledge base.\n\n"
+        f"You are an index resolver for a {_BRAND.scope} knowledge base.\n\n"
         f"Available indexes:\n{hierarchy}\n\n"
         f"Index naming convention: 'DOMAIN__SUBTOPIC' (or just 'DOMAIN' when "
-        f"there is no sub-topic). DOMAIN is the data domain — finances, "
-        f"RH, patrimoine, métier, divers, pilotage, etc. — NOT a city name.\n\n"
+        f"there is no sub-topic). DOMAIN is the L1 data domain, NOT the more "
+        f"granular sub-topic.\n\n"
         f"Known domains (L1): {', '.join(domain_names)}\n\n"
         f"Query: \"{query}\"\n\n"
         "Pick the index(es) whose DOMAIN matches the user's intent. Use "
-        "common sense to map French municipal vocabulary to the right "
-        "domain:\n"
-        "- 'budget', 'dépenses', 'recettes', 'dotation', 'subvention', "
-        "'compte administratif', 'fiscalité', 'trésor' → finance / comptable\n"
-        "- 'effectifs', 'masse salariale', 'agents', 'fonctionnaires', "
-        "'formation', 'paie', 'absentéisme', 'congés' → RH / personnel\n"
-        "- 'bâtiment', 'équipement', 'inventaire', 'maintenance', "
-        "'travaux', 'énergie', 'parcelle', 'voirie' → patrimoine / maintenance\n"
-        "- 'matériel informatique', 'véhicules', 'opérationnel', "
-        "'service', 'délégation' → métier divers\n"
-        "- 'rapport', 'délibération', 'arrêté', 'orientation', "
-        "'égalité' → divers / rapports administratifs\n"
-        "- 'indicateurs', 'tableau de bord', 'pilotage', 'mandat' → pilotage / suivi\n\n"
+        "common sense to map the domain vocabulary to the right domain:\n"
+        f"{_BRAND.resolver_domain_map}\n\n"
         "Rules:\n"
-        "1. Match on DOMAIN keywords first. The SUBTOPIC level (e.g. "
-        "'données piscine saint-raphaël') is a refinement — pick it only "
-        "if the query explicitly names that sub-topic; otherwise keep "
-        "the broader DOMAIN.\n"
-        "2. Boundary topics (overlap two domains) — return BOTH:\n"
-        "   - 'charges patronales', 'cotisations sociales', 'masse "
-        "salariale brute', 'salaires bruts/nets', 'primes', 'IJSS', "
-        "'taxe sur salaires' → finance AND RH\n"
-        "   - 'travaux énergie', 'rénovation thermique' → patrimoine "
-        "AND finance\n"
-        "3. **Pilotage / tableaux de bord aggregate KPIs across every "
-        "domain** — ALWAYS include the relevant pilotage / suivi / "
+        "1. Match on DOMAIN keywords first. The SUBTOPIC level is a "
+        "refinement — pick it only if the query explicitly names that "
+        "sub-topic; otherwise keep the broader DOMAIN.\n"
+        "2. Boundary topics — when a query clearly spans two domains, "
+        "return BOTH.\n"
+        "3. **Cross-cutting dashboard / KPI indexes aggregate data across "
+        "every domain** — ALWAYS include the relevant dashboard / suivi / "
         "indicateurs indexes alongside the primary match whenever the "
-        "query is about a specific service, year, or KPI. The answer "
+        "query is about a specific metric, period, or entity. The answer "
         "may live in a dashboard rather than the source domain file.\n"
         "4. Indexes containing 'divers', 'misc', 'autre', 'général' "
         "should always be added when their domain matches, because "
@@ -202,25 +188,17 @@ def resolve_indexes(query: str, available: list[str]) -> list[str]:
         return matched if matched else available
 
 
-# Pilotage / tableaux-de-bord indexes aggregate cross-domain data and are
-# always added on top of whatever Flash returns. Flash routinely misses
-# them because their label vocabulary does not match RH / finance /
-# patrimoine domain keywords.
-_PILOTAGE_LABELS = (
-    "pilotage", "tableaux de pilotage", "tableaux-de-pilotage",
-    "tableau de pilotage", "indicateurs", "suivi",
-)
+# Cross-cutting dashboard indexes aggregate cross-domain data and are always
+# added on top of whatever Flash returns. Flash routinely misses them because
+# their label vocabulary does not match the primary domain keywords.
+# Sourced from the active brand profile.
+_PILOTAGE_LABELS = _BRAND.pilotage_labels
 
 # Boundary topics that genuinely span two domains — when triggered we add
-# both sides regardless of what Flash returned.
-_BOUNDARY_RULES: list[tuple[tuple[str, ...], tuple[str, ...]]] = [
-    (("charges patronales", "cotisations sociales", "masse salariale brute",
-      "masse salariale", "salaires bruts", "salaires nets", "primes",
-      "ijss", "taxe sur salaires"),
-     ("rh", "personnel", "finance", "comptable", "financière", "financier")),
-    (("travaux énergie", "rénovation thermique", "énergétique"),
-     ("patrimoine", "maintenance", "énergie", "finance", "comptable")),
-]
+# both sides regardless of what Flash returned. Sourced from the profile.
+_BOUNDARY_RULES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    _BRAND.boundary_rules
+)
 
 
 def _augment_resolution(

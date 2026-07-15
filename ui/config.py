@@ -7,20 +7,22 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from rag_agent.config import MODEL as GENERATION_MODEL, GENERATION_SYSTEM_PROMPT
+from shared.brand import ACTIVE as BRAND
 
 # ── Page meta ─────────────────────────────────────────────────────────────────
-APP_TITLE       = "Indica"
-APP_SUBTITLE    = "Knowledge base for the city hall"
+APP_TITLE       = BRAND.name
+APP_SUBTITLE    = BRAND.subtitle
+APP_DESCRIPTION = BRAND.description
 APP_ICON        = None
 LAYOUT          = "wide"
 
-# ── Brand colors ──────────────────────────────────────────────────────────────
-HYBRID_COLOR    = "#34A853"   # Hybrid pipeline accent
-ACCENT_COLOR    = "#4285F4"   # Primary accent
-ACCENT_LIGHT    = "#EBF3FD"   # Light accent tint
-USER_COLOR      = "#F8F9FA"
-TOOL_COLOR      = "#FFF3CD"
-ERROR_COLOR     = "#F8D7DA"
+# ── Brand colors (from the active profile theme) ──────────────────────────────
+HYBRID_COLOR    = BRAND.theme.hybrid    # Hybrid pipeline accent
+ACCENT_COLOR    = BRAND.theme.accent    # Primary accent
+ACCENT_LIGHT    = BRAND.theme.accent_light  # Light accent tint
+USER_COLOR      = BRAND.theme.user
+TOOL_COLOR      = BRAND.theme.tool
+ERROR_COLOR     = BRAND.theme.error
 
 # ── Pipeline label ────────────────────────────────────────────────────────────
 HYBRID_LABEL    = "Hybrid RAG"

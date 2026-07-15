@@ -18,53 +18,34 @@ Model choice:
 
 from vertexai.generative_models import GenerativeModel
 from shared.gemini_retry import generate_with_retry
+from shared.brand import ACTIVE as _BRAND
 
 _REWRITER_MODEL = "gemini-2.0-flash-001"
 
-_SYSTEM_PROMPT = """You are a query optimizer for a French city-hall knowledge base.
+# Domain framing (corpus intro, terms to keep, few-shot examples) is injected
+# from the active brand profile; the rewrite rules themselves are generic.
+_SYSTEM_PROMPT = f"""You are a query optimizer for a knowledge base.
 
-The whole base belongs to ONE commune. Users (mayors, deputy mayors,
-accountants, HR officers, agents) ask questions about internal data —
-finances, RH, patrimoine, maintenance, métier, indicateurs de pilotage,
-rapports administratifs, etc.
+{_BRAND.rewriter_intro}
 
 Your role: transform what a user types into a semantic query optimized
 for vector search across these data domains.
 
 Rules:
-- KEEP proper nouns: commune names, project names, supplier names, person names, document references
-- KEEP domain-specific terms: budget, dotation, subvention, marché public, délibération, arrêté, contrat, agent, statut, équipement, parcelle...
+- KEEP proper nouns: project names, supplier names, person names, document references
+- KEEP domain-specific terms: {_BRAND.rewriter_keep_terms}...
 - ALWAYS KEEP numerical information (dates, durations, amounts) — e.g. "2024", "3 mois", "150k€"
-- ALWAYS include time-related concepts if present: échéance, durée, période, exercice, mandature
+- ALWAYS include time-related concepts if present: échéance, durée, période, délai
 - Remove conversational fluff ("can you tell me", "I'd like to know", "please help")
-- If the query references a category (finances, RH, patrimoine, métier...), keep it front and center
+- If the query references a data domain, keep it front and center
 - If conversational context is provided, include key entities from it
 - Formulate a short retrieval-oriented query (max 20 words)
 - Respond ONLY with the rewritten query, no explanation
 
-For vague questions, return broad terms covering likely topics:
-"budget commune dotation subvention exercice"
+For vague questions, return broad terms covering likely topics.
 
 Examples without context:
-  "what's our debt level for 2024?"
-    → "endettement encours dette 2024 capacité désendettement"
-  "how many fonctionnaires titulaires do we have?"
-    → "effectif fonctionnaires titulaires statut RH agents"
-  "show me the contract with Veolia"
-    → "contrat Veolia marché public prestation eau assainissement"
-  "list all subsidies received this year"
-    → "subventions reçues année courante DGF dotation État région"
-  "when does the gym roof need to be replaced?"
-    → "gymnase toiture rénovation patrimoine échéance maintenance"
-
-Examples with context:
-  context: "Q: what's the 2024 budget?"
-  question: "and the variation versus last year?"
-  → "budget 2024 vs 2023 variation évolution comparaison exercices"
-
-  context: "Q: building maintenance schedule"
-  question: "and the school?"
-  → "école entretien maintenance bâtiment scolaire calendrier travaux"
+{_BRAND.rewriter_examples}
 """
 
 

@@ -1,7 +1,8 @@
 """
 Module d'authentification — login / guard / logout / gestion admin.
 
-Stockage : SQLite à ui/data/users.db
+Stockage : SQLite, chemin par marque via shared/brand.py (users_db_path).
+Chaque marque a donc sa propre base de comptes (isolation auth).
 Mots de passe : PBKDF2-HMAC-SHA256 (stdlib, aucune dépendance externe).
 
 Création de comptes : réservée aux admins (via page Admin ou script CLI).
@@ -19,8 +20,19 @@ from pathlib import Path
 
 import streamlit as st
 
-_DB_DIR  = Path(__file__).parent / "data"
-_DB_PATH = _DB_DIR / "users.db"
+from shared.brand import ACTIVE as _BRAND
+from shared.role_permissions import DEFAULT_ROLE
+
+# Per-brand user store. Resolve relative paths against the project root
+# (parent of ui/), so each profile keeps its accounts in a separate SQLite file.
+_PROJECT_ROOT = Path(__file__).parent.parent
+_DB_PATH = Path(_BRAND.users_db_path)
+if not _DB_PATH.is_absolute():
+    _DB_PATH = _PROJECT_ROOT / _DB_PATH
+_DB_DIR  = _DB_PATH.parent
+
+# Owner role bootstrapped for admins on legacy DB migration (first listed role).
+_OWNER_ROLE = _BRAND.roles[0] if _BRAND.roles else DEFAULT_ROLE
 
 _conn: sqlite3.Connection | None = None
 
@@ -49,14 +61,44 @@ def _get_conn() -> sqlite3.Connection:
             _conn.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass  # Colonne déjà présente
-        # Migration : ajoute role + bootstrap (is_admin → maire, sinon agent)
+        # Migration : ajoute role + bootstrap (is_admin → owner role de la marque)
         try:
             _conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'agent'")
-            _conn.execute("UPDATE users SET role = 'maire' WHERE is_admin = 1")
+            _conn.execute("UPDATE users SET role = ? WHERE is_admin = 1", [_OWNER_ROLE])
         except sqlite3.OperationalError:
             pass  # Colonne déjà présente
         _conn.commit()
+        _ensure_default_admin(_conn)
     return _conn
+
+
+# ── Bootstrap : admin par défaut à la première création de la BDD ─────────────
+
+# Toute BDD de marque fraîchement créée reçoit ce compte admin, sinon personne
+# ne peut se connecter. Identifiant volontairement simple pour le premier accès.
+_DEFAULT_ADMIN_EMAIL = "elevate"
+_DEFAULT_ADMIN_PASSWORD = "elevate2026"
+_DEFAULT_ADMIN_NAME = "Elevate"
+
+
+def _ensure_default_admin(conn: sqlite3.Connection) -> None:
+    """Create the ``elevate`` admin on an empty user store (any brand)."""
+    count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    if count:
+        return
+    conn.execute(
+        "INSERT INTO users (id, email, password_hash, display_name, created_at, is_admin, role) "
+        "VALUES (?, ?, ?, ?, ?, 1, ?)",
+        [
+            str(uuid.uuid4()),
+            _DEFAULT_ADMIN_EMAIL,
+            _hash_password(_DEFAULT_ADMIN_PASSWORD),
+            _DEFAULT_ADMIN_NAME,
+            datetime.now().isoformat(),
+            _OWNER_ROLE,
+        ],
+    )
+    conn.commit()
 
 
 # ── Hachage mot de passe ──────────────────────────────────────────────────────
@@ -83,12 +125,14 @@ def create_user(
     password: str,
     display_name: str,
     is_admin: bool = False,
-    role: str = "agent",
+    role: str | None = None,
 ) -> dict | None:
     """
     Crée un utilisateur (réservé aux admins ou au script d'init).
     Retourne le dict user ou None si l'email est déjà pris.
+    Le rôle par défaut est celui de la marque active (``DEFAULT_ROLE``).
     """
+    role    = role or DEFAULT_ROLE
     conn    = _get_conn()
     user_id = str(uuid.uuid4())
     now     = datetime.now().isoformat()
@@ -197,7 +241,7 @@ def login_user(user: dict) -> None:
     st.session_state.user_email   = user["email"]
     st.session_state.display_name = user["display_name"]
     st.session_state.is_admin     = user.get("is_admin", False)
-    st.session_state.role         = user.get("role") or "agent"
+    st.session_state.role         = user.get("role") or DEFAULT_ROLE
 
 
 def logout_user() -> None:
@@ -228,7 +272,7 @@ def require_auth() -> dict:
         "email":        st.session_state.get("user_email", ""),
         "display_name": st.session_state.get("display_name", ""),
         "is_admin":     st.session_state.get("is_admin", False),
-        "role":         st.session_state.get("role", "agent"),
+        "role":         st.session_state.get("role", DEFAULT_ROLE),
     }
 
 

@@ -5,7 +5,7 @@ Home page — overview of communes and indexed knowledge base.
 import path_setup  # noqa: F401
 import streamlit as st
 from config import (
-    APP_TITLE, APP_SUBTITLE, APP_ICON, LAYOUT,
+    APP_TITLE, APP_SUBTITLE, APP_DESCRIPTION, APP_ICON, LAYOUT,
     ACCENT_COLOR, ACCENT_LIGHT,
 )
 from auth import require_auth
@@ -39,12 +39,7 @@ st.divider()
 # ── Pitch ─────────────────────────────────────────────────────────────────────
 
 st.subheader("Internal knowledge, instantly searchable")
-st.markdown(
-    "Indica indexes the city hall's internal documents — finances, HR, "
-    "patrimony, maintenance, business records, indicators — and lets the "
-    "mayor, deputy mayors, accountants, HR officers and agents find answers "
-    "in plain language, with sourced citations."
-)
+st.markdown(APP_DESCRIPTION)
 
 st.divider()
 

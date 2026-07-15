@@ -19,26 +19,28 @@ the rest of the code.
 
 from __future__ import annotations
 
+from shared.brand import ACTIVE as _BRAND
+
 INDEX_SEP = "__"
 
-# ── Canonical roles ──────────────────────────────────────────────────────────
-
-ROLES: list[str] = ["maire", "adjoint", "comptable", "rh", "agent"]
+# ── Canonical roles (from the active brand profile) ───────────────────────────
+# Each brand defines its own roles, default role and per-role access rules in
+# shared/brand.py — this module just consumes the active profile.
+ROLES: list[str] = list(_BRAND.roles)
+DEFAULT_ROLE: str = _BRAND.default_role
 
 # ── Role → keyword whitelist ─────────────────────────────────────────────────
-# None = full access. A list = substring matches (case-insensitive) on the
-# category part of the index name.
-ROLE_KEYWORDS: dict[str, list[str] | None] = {
-    "maire":     None,
-    "adjoint":   None,
-    "comptable": ["finance", "compta", "budget", "tresor"],
-    "rh":        ["rh", "personnel", "ressources humaines", "ressources_humaines"],
-    "agent":     ["metier", "service"],
-}
+# None = full access. A tuple/list = substring matches (case-insensitive) on
+# the category part of the index name.
+ROLE_KEYWORDS: dict[str, tuple[str, ...] | None] = dict(_BRAND.role_keywords)
 
 
 def _category_of(index_name: str) -> str:
-    """Return the category portion of ``commune__category``, lowercased."""
+    """Return the category portion of ``domain__category``, lowercased.
+
+    Single-segment index names (no ``__``) are returned whole — for brands
+    whose L1 index *is* the category (e.g. hermes ``garantie``).
+    """
     if INDEX_SEP in index_name:
         return index_name.split(INDEX_SEP, 1)[1].lower()
     return index_name.lower()
@@ -50,15 +52,16 @@ def filter_indexes_for_role(indexes: list[str], role: str | None) -> list[str]:
 
     Args:
         indexes: All available index names.
-        role:    Business role string (defaults to "agent" if falsy/unknown).
+        role:    Business role string (defaults to the brand's default role
+                 if falsy/unknown).
 
     Returns:
         Subset of *indexes* the role is allowed to query. Order preserved.
     """
     if not indexes:
         return []
-    role = (role or "agent").lower()
-    keywords = ROLE_KEYWORDS.get(role, ROLE_KEYWORDS["agent"])
+    role = (role or DEFAULT_ROLE).lower()
+    keywords = ROLE_KEYWORDS.get(role, ROLE_KEYWORDS.get(DEFAULT_ROLE))
     if keywords is None:
         return list(indexes)
 
@@ -72,4 +75,4 @@ def filter_indexes_for_role(indexes: list[str], role: str | None) -> list[str]:
 
 def role_has_full_access(role: str | None) -> bool:
     """True if the role bypasses all index filtering."""
-    return ROLE_KEYWORDS.get((role or "agent").lower()) is None
+    return ROLE_KEYWORDS.get((role or DEFAULT_ROLE).lower()) is None

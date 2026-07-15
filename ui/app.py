@@ -1,5 +1,5 @@
 """
-Indica — Knowledge base for city halls
+Knowledge base app — brand/identity is set by the active profile (shared/brand.py).
 Point d'entrée Streamlit : router de navigation dynamique.
 
 Toutes les pages sont toujours enregistrées (position="hidden") pour éviter

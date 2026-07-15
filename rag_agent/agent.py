@@ -5,6 +5,11 @@ from .tools.compare_documents import compare_documents
 from .tools.query_document import query_document
 from .config import MODEL
 from hybrid.config import DRIVE_ROOT_FOLDER
+from shared.brand import ACTIVE as BRAND
+
+BRAND_NAME = BRAND.name
+AGENT_NAME = BRAND.agent_name
+BRAND_DOMAIN = BRAND.domain
 
 from hybrid.tools.hybrid_create_index import hybrid_create_index
 from hybrid.tools.hybrid_add_data     import hybrid_add_data, hybrid_add_data_auto
@@ -38,23 +43,20 @@ _ADMIN_TOOLS = [
 # ── Shared instruction template ───────────────────────────────────────────────
 
 _BASE_INSTRUCTION = f"""
-# Indica — Knowledge Base Agent
+# {BRAND_NAME} — Knowledge Base Agent
 
-You are an internal knowledge base assistant for a **city hall** (a single
-commune; the whole knowledge base belongs to that one commune). Users —
-mayors, deputy mayors, accountants, HR officers, agents — ask questions
-about internal data and you search the hybrid knowledge base to provide
-accurate, sourced answers.
+You are an internal knowledge base assistant for {BRAND.scope} (the whole
+knowledge base belongs to that single scope). Users — {BRAND.audience} —
+ask questions about internal data and you search the hybrid knowledge base
+to provide accurate, sourced answers.
 
 The data is organised by **data domain** (the L1 Drive folder), and each
 domain may have an optional **sub-topic** (L2 sub-folder) for more
-granular collections. Examples of domains: financière & comptable, RH,
-patrimoine-maintenance-énergie, métier divers, divers (rapports
-administratifs), tableaux de pilotage-suivi.
+granular collections. Examples of domains: {BRAND.domain_examples}.
 
 Index naming convention: `DOMAIN__SUBTOPIC`, or just `DOMAIN` when there
-is no sub-folder. The whole base = one commune, so there is no
-"commune" segment — L1 is always the domain.
+is no sub-folder. The whole base is a single scope, so there is no extra
+top-level segment — L1 is always the domain.
 
 When answering questions:
 - Give the answer first, details second
@@ -209,9 +211,9 @@ NEVER fill gaps with your general knowledge.
 # ── User agent (read-only — query, inspect, compare) ──────────────────────────
 
 user_agent = Agent(
-    name="IndicaAgent",
+    name=AGENT_NAME,
     model=MODEL,
-    description="Indica — Hybrid RAG agent for city halls",
+    description=f"{BRAND_NAME} — Hybrid RAG agent for {BRAND_DOMAIN}",
     tools=_READ_TOOLS,
     instruction=_BASE_INSTRUCTION,
 )
@@ -219,9 +221,9 @@ user_agent = Agent(
 # ── Admin agent (all tools — read + write/manage) ─────────────────────────────
 
 root_agent = Agent(
-    name="IndicaAgent",
+    name=AGENT_NAME,
     model=MODEL,
-    description="Indica — Hybrid RAG agent for city halls (admin)",
+    description=f"{BRAND_NAME} — Hybrid RAG agent for {BRAND_DOMAIN} (admin)",
     tools=_READ_TOOLS + _ADMIN_TOOLS,
     instruction=_BASE_INSTRUCTION + f"""
 
@@ -231,14 +233,14 @@ root_agent = Agent(
 
 ### Available admin tools
 - Create an index → `hybrid_create_index`
-- Add data from Drive → `hybrid_add_data(index_name="commune__category", folder_names=["FolderName"])`
+- Add data from Drive → `hybrid_add_data(index_name="domain__subtopic", folder_names=["FolderName"])`
 - Auto-ingest the full Drive tree → `hybrid_add_data_auto()`
 - Delete an index → `hybrid_delete_index` (always ask for confirmation)
 
 ### Drive structure
 The root folder is: **"{DRIVE_ROOT_FOLDER}"**
 
-The whole tree under that root belongs to ONE commune. Indexing handles
+The whole tree under that root belongs to a single scope. Indexing handles
 two structural patterns:
 
 ```
@@ -254,7 +256,7 @@ two structural patterns:
 ```
 
 Convention: **L1 is the data domain**, **L2 is an optional sub-topic**.
-There is no "commune" segment — the whole base is for the same commune.
+There is no extra top-level segment — the whole base is a single scope.
 
 ### Automatic ingestion (recommended)
 - **Ingest everything**: `hybrid_add_data_auto()` — scans the full Drive tree,

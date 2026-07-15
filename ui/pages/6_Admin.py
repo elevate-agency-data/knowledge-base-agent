@@ -12,7 +12,7 @@ from auth import (
     require_admin, create_user, list_users,
     set_user_active, set_user_role, reset_password,
 )
-from shared.role_permissions import ROLES
+from shared.role_permissions import ROLES, DEFAULT_ROLE
 from components.sidebar_auth import render_sidebar_user
 
 st.set_page_config(
@@ -52,7 +52,7 @@ with st.form("create_user_form", clear_on_submit=True):
         new_role = st.selectbox(
             "Rôle métier",
             ROLES,
-            index=ROLES.index("agent"),
+            index=ROLES.index(DEFAULT_ROLE) if DEFAULT_ROLE in ROLES else 0,
             help="Détermine quels index l'utilisateur peut interroger.",
         )
     with col_admin:
@@ -107,7 +107,7 @@ else:
                     new_role_val = st.selectbox(
                         "Nouveau rôle",
                         ROLES,
-                        index=ROLES.index(u["role"]) if u["role"] in ROLES else ROLES.index("agent"),
+                        index=ROLES.index(u["role"]) if u["role"] in ROLES else (ROLES.index(DEFAULT_ROLE) if DEFAULT_ROLE in ROLES else 0),
                         key=f"role_{u['id']}",
                     )
                     if st.form_submit_button("Mettre à jour"):

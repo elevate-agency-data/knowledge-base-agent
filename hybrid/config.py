@@ -13,10 +13,10 @@ LOCATION: str = "europe-west1"
 SERVICE_ACCOUNT_PATH: str = "rag_agent/key.json"
 
 # ---------------------------------------------------------------------------
-# Drive — dossier racine contenant les sous-dossiers clients
-# Modifier cette valeur pour pointer vers un autre répertoire Drive.
+# Drive — dossier racine contenant les sous-dossiers clients.
+# Valeur centralisée dans shared/brand.py (re-exportée ici par compat).
 # ---------------------------------------------------------------------------
-DRIVE_ROOT_FOLDER: str = "Rag_indica"
+from shared.brand import DRIVE_ROOT_FOLDER  # noqa: E402,F401
 
 # ---------------------------------------------------------------------------
 # Environment: "local" → DuckDB  |  "gcp" → AlloyDB
@@ -24,9 +24,10 @@ DRIVE_ROOT_FOLDER: str = "Rag_indica"
 ENV: str = "local"
 
 # ---------------------------------------------------------------------------
-# DuckDB (local dev)
+# DuckDB (local dev) — per-tenant store, centralized in shared/brand.py so the
+# active profile switches the data store together with the branding.
 # ---------------------------------------------------------------------------
-DUCKDB_PATH: str = "hybrid/data/hybrid.duckdb"
+from shared.brand import DUCKDB_PATH  # noqa: E402,F401
 
 # ---------------------------------------------------------------------------
 # AlloyDB (GCP prod) — fill in the real DSN for production

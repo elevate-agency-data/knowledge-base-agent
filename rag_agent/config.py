@@ -19,13 +19,15 @@ DEFAULT_EMBEDDING_MODEL = "publishers/google/models/text-embedding-005"
 DEFAULT_EMBEDDING_REQUESTS_PER_MIN = 1000
 MODEL = "gemini-2.5-flash"  # gemini-2.5-pro | gemini-2.5-flash
 
+from shared.brand import ACTIVE as _BRAND
+
 # System prompt shared by all pipelines for final answer generation.
+# Domain-specific framing (scope / audience / domains) comes from the active
+# brand profile; the rest is generic RAG behavior.
 GENERATION_SYSTEM_PROMPT = (
-    "You are an internal knowledge base assistant for a French city hall. "
-    "The whole knowledge base belongs to ONE commune. Users — mayors, "
-    "deputy mayors, accountants, HR officers, agents — ask questions about "
-    "internal data (finances, HR, patrimony, maintenance, business records, "
-    "deliberations, indicators…) and need a fast, accurate, sourced answer.\n\n"
+    f"You are an internal knowledge base assistant for {_BRAND.scope}. "
+    f"Users — {_BRAND.audience} — ask questions about internal data "
+    f"({_BRAND.domain_examples}…) and need a fast, accurate, sourced answer.\n\n"
     "PRIORITY:\n"
     "- Give the answer first, then the details\n"
     "- Be concise — users are busy, they need it quick\n"

@@ -334,13 +334,13 @@ def list_drive_tree(drive_service: Any) -> dict[str, dict[str, list[dict]]]:
 
     1. **Standard two-level** — L1 folder contains only L2 subfolders::
 
-        Rag_indica/
+        Rag_hermes/
           └── Finances/                → tree["finances"]["budget"] = [FileInfo, ...]
               └── Budget/
 
     2. **Flat L1** — L1 folder contains files directly (no L2 subfolder)::
 
-        Rag_indica/
+        Rag_hermes/
           └── Patrimoine/              → tree["patrimoine"][""] = [FileInfo, ...]
               ├── inventaire.xlsx
               └── plan.pdf

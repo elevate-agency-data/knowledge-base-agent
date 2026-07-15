@@ -17,15 +17,17 @@ from __future__ import annotations
 
 import threading
 
+from shared.role_permissions import DEFAULT_ROLE
+
 _local = threading.local()
 
 
 def set_user_role(role: str | None) -> None:
-    _local.role = role or "agent"
+    _local.role = role or DEFAULT_ROLE
 
 
 def get_user_role() -> str:
-    return getattr(_local, "role", "agent")
+    return getattr(_local, "role", DEFAULT_ROLE)
 
 
 def clear_user_role() -> None:

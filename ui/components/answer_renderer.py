@@ -15,6 +15,12 @@ import re
 
 import streamlit as st
 
+from shared.brand import ACTIVE as _BRAND
+
+# Accent colors follow the active brand profile (see shared/brand.py).
+_ACCENT = _BRAND.theme.accent
+_ACCENT_LIGHT = _BRAND.theme.accent_light
+
 
 # ── Source badge highlighting ────────────────────────────────────────────────
 
@@ -40,17 +46,17 @@ def _highlight_sources(text: str, sources: list[dict]) -> str:
             source_map[stem.lower()] = url
 
     _BADGE_LINK = (
-        '<a href="{url}" target="_blank" '
-        'style="background:#EBF3FD;color:#4285F4;padding:2px 8px;'
-        'border-radius:4px;font-size:0.82em;text-decoration:none;'
-        'border:1px solid #4285F430;white-space:normal;'
-        'margin:0 2px">{label}</a>'
+        f'<a href="{{url}}" target="_blank" '
+        f'style="background:{_ACCENT_LIGHT};color:{_ACCENT};padding:2px 8px;'
+        f'border-radius:4px;font-size:0.82em;text-decoration:none;'
+        f'border:1px solid {_ACCENT}30;white-space:normal;'
+        f'margin:0 2px">{{label}}</a>'
     )
     _BADGE_SPAN = (
-        '<span style="background:#EBF3FD;color:#4285F4;padding:2px 8px;'
-        'border-radius:4px;font-size:0.82em;'
-        'border:1px solid #4285F430;white-space:normal;'
-        'margin:0 2px">{label}</span>'
+        f'<span style="background:{_ACCENT_LIGHT};color:{_ACCENT};padding:2px 8px;'
+        f'border-radius:4px;font-size:0.82em;'
+        f'border:1px solid {_ACCENT}30;white-space:normal;'
+        f'margin:0 2px">{{label}}</span>'
     )
 
     def _find_url(citation: str) -> str:
@@ -139,7 +145,7 @@ def md_to_html(text: str) -> str:
         "border-collapse:collapse;width:100%;margin:8px 0;font-size:0.92em"
     )
     _TH_STYLE = (
-        "border:1px solid #C5D9F5;padding:6px 10px;background:#EBF3FD;"
+        f"border:1px solid {_ACCENT}40;padding:6px 10px;background:{_ACCENT_LIGHT};"
         "text-align:left;font-weight:600"
     )
     _TD_STYLE = "border:1px solid #D4E8DC;padding:6px 10px"
@@ -225,7 +231,7 @@ def md_to_html(text: str) -> str:
     # Markdown links: [label](https://...) → clickable label (preferred format)
     result = re.sub(
         r'\[([^\]]+)\]\((https?://[^\s\)]+)\)',
-        r'<a href="\2" target="_blank" style="color:#4285F4;text-decoration:underline">\1</a>',
+        rf'<a href="\2" target="_blank" style="color:{_ACCENT};text-decoration:underline">\1</a>',
         result,
     )
 
@@ -234,7 +240,7 @@ def md_to_html(text: str) -> str:
     # file extension — neither matches a Drive URL, so they don't conflict.
     result = re.sub(
         r'\((https?://[^\s\)]+)\)',
-        r'(<a href="\1" target="_blank" style="color:#4285F4;text-decoration:underline">\1</a>)',
+        rf'(<a href="\1" target="_blank" style="color:{_ACCENT};text-decoration:underline">\1</a>)',
         result,
     )
     return result

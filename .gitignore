@@ -32,3 +32,6 @@ ui/data/
 
 # === Hybrid RAG local data ===
 hybrid/data/benchmark_results.json
+
+# Streamlit generated theme config (from shared/brand.py)
+.streamlit/config.toml

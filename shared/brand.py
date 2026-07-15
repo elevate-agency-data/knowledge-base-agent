@@ -29,13 +29,41 @@ from dataclasses import dataclass, field
 # ── Theme ─────────────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Theme:
-    """UI accent palette for a profile."""
-    accent: str          # primary accent
-    accent_light: str    # light accent tint
+    """UI palette for a profile.
+
+    ``accent`` drives the Streamlit *primaryColor* (buttons, widgets, links)
+    and the custom components. The ``background`` / ``text`` / ``base`` fields
+    feed Streamlit's native theme so the whole chrome follows the brand — see
+    ``streamlit_theme_env``.
+    """
+    accent: str          # primary accent → Streamlit primaryColor
+    accent_light: str    # light accent tint (secondary background default)
     hybrid: str          # Hybrid pipeline accent
     user: str            # user message bg
     tool: str            # tool call bg
     error: str           # error bg
+    background: str = "#FFFFFF"        # page background
+    secondary_background: str = "#F5F6F8"  # sidebar / cards (neutral grey)
+    text: str = "#1A1A1A"              # main text color
+    base: str = "light"                # Streamlit base theme ("light" | "dark")
+
+
+def streamlit_theme_env(theme: Theme) -> dict[str, str]:
+    """Map a Theme to Streamlit ``STREAMLIT_THEME_*`` environment variables.
+
+    Setting these before ``streamlit run`` themes the whole native chrome
+    (buttons, widgets, sidebar, primary accents) per brand — overriding any
+    server-level ``.streamlit/config.toml``.
+    """
+    return {
+        "STREAMLIT_THEME_BASE": theme.base,
+        "STREAMLIT_THEME_PRIMARY_COLOR": theme.accent,
+        "STREAMLIT_THEME_BACKGROUND_COLOR": theme.background,
+        "STREAMLIT_THEME_SECONDARY_BACKGROUND_COLOR": (
+            theme.secondary_background or theme.accent_light
+        ),
+        "STREAMLIT_THEME_TEXT_COLOR": theme.text,
+    }
 
 
 # ── Profile ───────────────────────────────────────────────────────────────────

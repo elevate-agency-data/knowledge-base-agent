@@ -12,12 +12,14 @@ from hybrid.config import (
     DENSE_WEIGHT,
     SPARSE_WEIGHT,
     RRF_K,
+    RRF_DENSE_GATED,
+    DEDUP_CONTENT,
 )
 from hybrid.stores import get_store
 from hybrid.embeddings import get_embedding_model
 from hybrid.retrieval.dense  import dense_search
 from hybrid.retrieval.sparse import sparse_search
-from hybrid.retrieval.fusion import reciprocal_rank_fusion
+from hybrid.retrieval.fusion import reciprocal_rank_fusion, deduplicate_by_content
 from hybrid.retrieval.filter import apply_post_filter
 
 
@@ -122,6 +124,7 @@ def hybrid_rag_query(
                 k=RRF_K,
                 dense_weight=DENSE_WEIGHT,
                 sparse_weight=SPARSE_WEIGHT,
+                dense_gated=RRF_DENSE_GATED,
             )
         elif retrieval_mode == "dense":
             results = dense_results
@@ -130,6 +133,10 @@ def hybrid_rag_query(
 
         # Post-filter (handles tag filtering and any filter the store missed)
         results = apply_post_filter(results, filters)
+
+        # Collapse the same passage duplicated across files
+        if DEDUP_CONTENT:
+            results = deduplicate_by_content(results)
 
         # Trim to top_k
         results = results[:top_k]

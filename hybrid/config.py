@@ -67,6 +67,17 @@ DENSE_WEIGHT: float = 0.7
 SPARSE_WEIGHT: float = 0.3
 RRF_K: int = 60
 
+# Hybrid fusion — keep sparse-only hits?
+# True  = only dense-validated chunks survive RRF. Suppresses BM25 noise but
+#         drops exact-match hits the embedding missed (product references,
+#         serial numbers, part names) — i.e. most of the point of hybrid search.
+# False = union: BM25 can surface what the embedding missed.
+RRF_DENSE_GATED: bool = False
+
+# Drop chunks whose normalised text is already present in the result list
+# (same passage duplicated across files). Conservative: exact match only.
+DEDUP_CONTENT: bool = True
+
 # ---------------------------------------------------------------------------
 # LLM
 # ---------------------------------------------------------------------------

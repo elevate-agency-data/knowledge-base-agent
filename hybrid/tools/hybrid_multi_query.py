@@ -19,12 +19,14 @@ from hybrid.config import (
     DENSE_WEIGHT,
     SPARSE_WEIGHT,
     RRF_K,
+    RRF_DENSE_GATED,
+    DEDUP_CONTENT,
 )
 from hybrid.stores import get_store
 from hybrid.embeddings import get_embedding_model
 from hybrid.retrieval.dense  import dense_search
 from hybrid.retrieval.sparse import sparse_search
-from hybrid.retrieval.fusion import reciprocal_rank_fusion
+from hybrid.retrieval.fusion import reciprocal_rank_fusion, deduplicate_by_content
 from hybrid.retrieval.filter import apply_post_filter
 from hybrid.tools.hybrid_rag_query import _sanitize
 
@@ -86,6 +88,7 @@ def _search_one_index(
                 k=RRF_K,
                 dense_weight=DENSE_WEIGHT,
                 sparse_weight=SPARSE_WEIGHT,
+                dense_gated=RRF_DENSE_GATED,
             )
         elif retrieval_mode == "dense":
             results = dense_results
@@ -210,8 +213,11 @@ def hybrid_multi_query(
             r["_index"] = index_name  # tag with source index
             all_chunks.append(r)
 
-    # Sort by score descending and trim to global top_k
+    # Sort by score descending, drop cross-index content duplicates, then trim.
+    # Dedup BEFORE the trim so duplicates don't eat the global top_k budget.
     all_chunks.sort(key=lambda c: c.get("score", 0), reverse=True)
+    if DEDUP_CONTENT:
+        all_chunks = deduplicate_by_content(all_chunks)
     all_chunks = all_chunks[:top_k]
 
     print(f"[multi_query] global trim: {len(all_chunks)}/{top_k} chunks kept")

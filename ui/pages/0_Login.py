@@ -21,17 +21,11 @@ if st.session_state.get("user_id"):
     st.stop()
 
 from auth import authenticate_user, login_user
+from components.brand_header import brand_header
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
-st.markdown(
-    f"""
-    <div style="text-align:center; padding: 32px 0 16px 0;">
-        <h1 style="margin-bottom: 4px;">{APP_TITLE}</h1>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+brand_header(centered=True)
 st.divider()
 
 # ── Formulaire de connexion ───────────────────────────────────────────────────

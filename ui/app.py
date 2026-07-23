@@ -13,6 +13,11 @@ Entry point: streamlit run ui/app.py
 import path_setup  # noqa: F401
 import streamlit as st
 
+from components.brand_header import brand_logo
+
+# Register the brand logo globally (top-left + sidebar) — no-op if no asset.
+brand_logo()
+
 
 # ── Warmup — préchargement au démarrage pour éviter le cold start ─────────────
 
@@ -50,6 +55,8 @@ pages = [
     st.Page("pages/0_Login.py",          title="Login",          default=True),
     st.Page("pages/Home.py",             title="Home"),
     st.Page("pages/1_Agent_Chat.py",     title="Agent Chat"),
+    st.Page("pages/2_RAG_Demo.py",       title="RAG Demo"),
+    st.Page("pages/How_RAG_Works.py",    title="How RAG Works"),
     st.Page("pages/5_Simple_Chat.py",    title="Simple Chat"),
     st.Page("pages/3_Index_Manager.py",  title="Knowledge Base"),
     st.Page("pages/6_Admin.py",          title="Administration"),

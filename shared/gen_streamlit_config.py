@@ -35,6 +35,7 @@ def _theme_toml() -> str:
         f'backgroundColor = "{t.background}"\n'
         f'secondaryBackgroundColor = "{secondary}"\n'
         f'textColor = "{t.text}"\n'
+        f'font = "{t.font}"\n'
     )
 
 

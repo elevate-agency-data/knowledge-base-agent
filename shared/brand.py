@@ -46,6 +46,7 @@ class Theme:
     secondary_background: str = "#F5F6F8"  # sidebar / cards (neutral grey)
     text: str = "#1A1A1A"              # main text color
     base: str = "light"                # Streamlit base theme ("light" | "dark")
+    font: str = "sans serif"           # Streamlit theme.font: sans serif|serif|monospace
 
 
 def streamlit_theme_env(theme: Theme) -> dict[str, str]:
@@ -114,6 +115,28 @@ class BrandProfile:
     default_role: str = "agent"
     role_keywords: dict[str, tuple[str, ...] | None] = field(default_factory=dict)
 
+    # 5. Branding assets & copy
+    #   logo_path : project-relative path to the brand logo (png/svg). Empty →
+    #               a styled text wordmark is shown instead. Supply the real
+    #               asset per brand; never ship a placeholder trademark.
+    #   headline  : Home page display line. Empty → falls back to subtitle.
+    logo_path: str = ""
+    headline: str = ""
+
+    # 6. "How RAG Works" teaching page — the fallback document shown when no PDF
+    #    is uploaded, and the chunks/query used for the live embedding demo.
+    #    Keep the text in the brand's own domain: the page is a client-facing
+    #    explainer, so a leather-care guide under a customer-care brand jars.
+    #    demo_chunks entries are (label, text); demo_query is the question the
+    #    chunks are ranked against.
+    #    demo_tags are the business tags displayed under the 4 sliced chunks,
+    #    following the docs/business_metadata.md convention (facet:value).
+    demo_doc_title: str = "Document de référence"
+    demo_doc_text: str = ""
+    demo_chunks: tuple[tuple[str, str], ...] = ()
+    demo_query: str = ""
+    demo_tags: tuple[tuple[str, ...], ...] = ()
+
     @property
     def agent_name(self) -> str:
         # ADK requires a valid Python identifier — strip spaces / punctuation.
@@ -147,6 +170,7 @@ _HERMES = BrandProfile(
         user="#FBF7F2",         # cream
         tool="#FDEEE1",
         error="#F8D7DA",
+        font="serif",           # classic serif — luxury register
     ),
     audience=(
         "client advisors, after-sales specialists, boutique staff and "
@@ -226,6 +250,40 @@ _HERMES = BrandProfile(
             "soin", "personnalisation",
         ),
     },
+    logo_path="ui/assets/hermes_logo.png",   # drop the official asset here
+    headline="The Maison's savoir-faire, instantly at hand.",
+    demo_doc_title="Guide d'entretien — Maroquinerie",
+    demo_doc_text=(
+        "Guide d'entretien — Maroquinerie\n\n"
+        "Cuir grainé (Togo, Clémence)\n"
+        "Époussetez régulièrement à l'aide d'un chiffon doux et sec. Évitez toute "
+        "exposition prolongée au soleil, à la chaleur et à l'humidité, qui peuvent "
+        "altérer la teinte et assouplir la structure du cuir.\n\n"
+        "En cas de tache, tamponnez délicatement sans frotter. N'appliquez ni "
+        "solvant ni produit gras : ils pénètrent la fibre et laissent une auréole.\n\n"
+        "Fermoirs et pièces métalliques\n"
+        "Essuyez les parties plaquées avec un linge doux. Le contact prolongé avec "
+        "l'eau, les parfums ou les cosmétiques ternit la finition.\n\n"
+        "Garantie et prise en charge\n"
+        "Chaque pièce peut être confiée en boutique pour un diagnostic. L'atelier "
+        "évalue l'usure, propose une réparation ou une restauration, et communique "
+        "un délai de prise en charge. Le suivi du dossier est accessible en boutique."
+    ),
+    demo_chunks=(
+        ("chunk 1", "Époussetez le cuir grainé avec un chiffon doux et sec. "
+                    "Évitez le soleil et l'humidité."),
+        ("chunk 2", "En cas de tache sur le cuir, tamponnez délicatement "
+                    "sans frotter ni solvant."),
+        ("chunk 3", "La pièce est confiée en boutique ; l'atelier évalue "
+                    "l'usure et le délai de prise en charge."),
+    ),
+    demo_query="comment entretenir le cuir ?",
+    demo_tags=(
+        ("matiere:cuir", "demande:entretien"),
+        ("matiere:cuir", "demande:tache"),
+        ("produit:fermoir", "matiere:metal"),
+        ("demande:garantie", "cible:conseiller"),
+    ),
 )
 
 
@@ -312,6 +370,40 @@ _INDICA = BrandProfile(
         "rh": ("rh", "personnel", "ressources humaines", "ressources_humaines"),
         "agent": ("metier", "service"),
     },
+    demo_doc_title="Délibération — Tarifs des services municipaux",
+    demo_doc_text=(
+        "Délibération — Tarifs des services municipaux\n\n"
+        "Restauration scolaire\n"
+        "Le tarif du repas est calculé selon le quotient familial. Les familles "
+        "transmettent leur avis d'imposition en début d'année scolaire ; à "
+        "défaut, le tarif plein est appliqué jusqu'à régularisation.\n\n"
+        "Piscine municipale\n"
+        "L'entrée unitaire et l'abonnement trimestriel sont révisés chaque "
+        "année. Un tarif réduit s'applique aux résidents de la commune sur "
+        "présentation d'un justificatif de domicile.\n\n"
+        "Recouvrement\n"
+        "Les factures sont émises mensuellement et payables en ligne ou auprès "
+        "du régisseur. Une relance est adressée après trente jours ; passé ce "
+        "délai, le dossier est transmis au Trésor public.\n\n"
+        "Entrée en vigueur\n"
+        "Les nouveaux tarifs s'appliquent au premier jour du mois suivant la "
+        "publication de la présente délibération."
+    ),
+    demo_chunks=(
+        ("chunk 1", "Le tarif du repas scolaire est calculé selon le quotient "
+                    "familial de la famille."),
+        ("chunk 2", "Un tarif réduit s'applique aux résidents sur présentation "
+                    "d'un justificatif de domicile."),
+        ("chunk 3", "Une relance est adressée après trente jours, puis le "
+                    "dossier part au Trésor public."),
+    ),
+    demo_query="comment est calculé le tarif de la cantine scolaire ?",
+    demo_tags=(
+        ("domaine:scolaire", "cible:agent"),
+        ("domaine:piscine", "demande:tarif"),
+        ("domaine:finance", "demande:recouvrement"),
+        ("domaine:deliberation", "cible:adjoint"),
+    ),
 )
 
 
@@ -373,6 +465,43 @@ _CC_ROLE_KEYWORDS: dict[str, tuple[str, ...] | None] = {
     ),
 }
 
+# Teaching-page demo document — customer-care register (Lacoste, Activate).
+_CC_DEMO_TITLE = "Procédure — Retours et remboursements"
+_CC_DEMO_TEXT = (
+    "Procédure — Retours et remboursements\n\n"
+    "Délai de rétractation\n"
+    "Le client dispose de trente jours à compter de la réception pour demander "
+    "un retour. Au-delà, seul un geste commercial validé par le superviseur "
+    "peut être proposé, sans obligation de reprise.\n\n"
+    "État de l'article\n"
+    "L'article doit être retourné complet, non porté et muni de ses étiquettes "
+    "d'origine. Un article abîmé par l'usage est refusé à réception et "
+    "réexpédié au client sans frais.\n\n"
+    "Frais de retour\n"
+    "Les frais sont offerts en cas d'erreur de préparation ou de produit "
+    "défectueux. Dans les autres cas, ils restent à la charge du client et "
+    "sont déduits du remboursement.\n\n"
+    "Remboursement\n"
+    "Le remboursement est déclenché après contrôle en entrepôt et intervient "
+    "sous cinq à sept jours ouvrés sur le moyen de paiement d'origine. Le "
+    "conseiller communique le numéro de dossier pour le suivi."
+)
+_CC_DEMO_CHUNKS = (
+    ("chunk 1", "Le client dispose de trente jours après réception pour "
+                "demander un retour."),
+    ("chunk 2", "L'article doit être complet, non porté et muni de ses "
+                "étiquettes d'origine."),
+    ("chunk 3", "Le remboursement intervient sous cinq à sept jours ouvrés "
+                "après contrôle en entrepôt."),
+)
+_CC_DEMO_QUERY = "combien de temps a le client pour demander un retour ?"
+_CC_DEMO_TAGS = (
+    ("demande:retour", "cible:conseiller"),
+    ("demande:retour", "produit:article"),
+    ("demande:frais", "cible:conseiller"),
+    ("demande:remboursement", "cible:superviseur"),
+)
+
 
 # ── Profile: Lacoste (customer care — client instance) ─────────────────────────
 _LACOSTE = BrandProfile(
@@ -403,6 +532,11 @@ _LACOSTE = BrandProfile(
     resolver_domain_map=_CC_RESOLVER_DOMAIN_MAP,
     # No cross-cutting dashboards / boundary rules in the customer-care model.
     users_db_path="ui/data/lacoste_users.db",
+    demo_doc_title=_CC_DEMO_TITLE,
+    demo_doc_text=_CC_DEMO_TEXT,
+    demo_chunks=_CC_DEMO_CHUNKS,
+    demo_query=_CC_DEMO_QUERY,
+    demo_tags=_CC_DEMO_TAGS,
     roles=_CC_ROLES,
     default_role=_CC_DEFAULT_ROLE,
     role_keywords=_CC_ROLE_KEYWORDS,
@@ -420,7 +554,9 @@ _ACTIVATE = BrandProfile(
         "lets advisors find ready-to-relay answers with sourced citations."
     ),
     drive_root_folder="RAG",
-    duckdb_path="Activate_db/hybrid.duckdb",
+    # Historical store — hosts the house indexes (elev8, …) alongside the
+    # client ones. Kept as-is so the existing knowledge base stays reachable.
+    duckdb_path="Activate_db/lacoste_hybrid.duckdb",
     theme=Theme(              # house palette (neutral blue) — tune to charter
         accent="#4285F4",
         accent_light="#EBF3FD",
@@ -436,10 +572,15 @@ _ACTIVATE = BrandProfile(
     rewriter_keep_terms=_CC_REWRITER_KEEP_TERMS,
     rewriter_examples=_CC_REWRITER_EXAMPLES,
     resolver_domain_map=_CC_RESOLVER_DOMAIN_MAP,
-    users_db_path="ui/data/activate_users.db",
+    users_db_path="ui/data/users.db",   # legacy store — keep existing accounts
     roles=_CC_ROLES,
     default_role=_CC_DEFAULT_ROLE,
     role_keywords=_CC_ROLE_KEYWORDS,
+    demo_doc_title=_CC_DEMO_TITLE,
+    demo_doc_text=_CC_DEMO_TEXT,
+    demo_chunks=_CC_DEMO_CHUNKS,
+    demo_query=_CC_DEMO_QUERY,
+    demo_tags=_CC_DEMO_TAGS,
 )
 
 

@@ -35,6 +35,24 @@ DEFAULT_ROLE: str = _BRAND.default_role
 ROLE_KEYWORDS: dict[str, tuple[str, ...] | None] = dict(_BRAND.role_keywords)
 
 
+_MISSING = object()
+
+
+def _keywords_for(role: str | None) -> tuple[str, ...] | None:
+    """Resolve the keyword whitelist for *role*.
+
+    A role that is absent from the map (e.g. a legacy role left over from
+    another brand's user store) falls back to the brand's default role. This
+    must NOT be confused with a role mapped to ``None``, which means full
+    access — ``dict.get`` alone returns ``None`` in both cases, which would
+    silently grant an unknown role the run of the whole store.
+    """
+    keywords = ROLE_KEYWORDS.get((role or DEFAULT_ROLE).lower(), _MISSING)
+    if keywords is _MISSING:
+        keywords = ROLE_KEYWORDS.get(DEFAULT_ROLE)
+    return keywords  # type: ignore[return-value]
+
+
 def _category_of(index_name: str) -> str:
     """Return the category portion of ``domain__category``, lowercased.
 
@@ -60,8 +78,7 @@ def filter_indexes_for_role(indexes: list[str], role: str | None) -> list[str]:
     """
     if not indexes:
         return []
-    role = (role or DEFAULT_ROLE).lower()
-    keywords = ROLE_KEYWORDS.get(role, ROLE_KEYWORDS.get(DEFAULT_ROLE))
+    keywords = _keywords_for(role)
     if keywords is None:
         return list(indexes)
 
@@ -74,5 +91,9 @@ def filter_indexes_for_role(indexes: list[str], role: str | None) -> list[str]:
 
 
 def role_has_full_access(role: str | None) -> bool:
-    """True if the role bypasses all index filtering."""
-    return ROLE_KEYWORDS.get((role or DEFAULT_ROLE).lower()) is None
+    """True if the role bypasses all index filtering.
+
+    An unknown role resolves through the default role, so it can only be
+    full-access if the default role itself is.
+    """
+    return _keywords_for(role) is None

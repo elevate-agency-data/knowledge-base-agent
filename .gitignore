@@ -35,3 +35,6 @@ hybrid/data/benchmark_results.json
 
 # Streamlit generated theme config (from shared/brand.py)
 .streamlit/config.toml
+
+# === Per-machine tool settings ===
+.claude/settings.local.json

@@ -1,6 +1,13 @@
 # Knowledge Base Agent
 
-Agent de gestion de bases de connaissances documentaires avec deux pipelines RAG complémentaires : **Vertex AI RAG** (cloud GCP) et **Hybrid RAG** (local DuckDB). Piloté via un agent conversationnel Google ADK et une interface Streamlit.
+Base de connaissance documentaire interrogeable en langage naturel, avec
+recherche hybride (sémantique + mots exacts) sur DuckDB local, un agent
+conversationnel Google ADK et une interface Streamlit.
+
+L'application est **multi-marque** : un seul fichier de configuration
+(`shared/brand.py`) porte l'identité, le thème, les prompts, les rôles et la
+base de données de chaque profil. Changer `BRAND_PROFILE` change toute
+l'application, sans toucher au code.
 
 ---
 
@@ -8,43 +15,59 @@ Agent de gestion de bases de connaissances documentaires avec deux pipelines RAG
 
 ```
 knowledge-base-agent/
-├── rag_agent/          # Pipeline Vertex AI RAG (Google Cloud)
-│   ├── agent.py        # Agent ADK principal (gemini-2.5-pro)
-│   ├── config.py       # Paramètres GCP, chunking, retrieval
-│   ├── simple_chat_agent.py  # Agent chat simplifié (sans outils)
-│   └── tools/          # Outils ADK : create_corpus, add_data, rag_query...
-│
-├── hybrid/             # Pipeline Hybrid RAG (local)
-│   ├── config.py       # Paramètres env, embeddings, retrieval, DRIVE_ROOT_FOLDER
-│   ├── embeddings/     # 5 modèles : minilm-384, mpnet-768, e5-large-1024, bge-m3, vertex
-│   ├── ingestion/      # Extraction Drive (PDF, Docx, Xlsx, Pptx), chunking HuggingFace
-│   ├── retrieval/      # Dense (HNSW/cosinus), Sparse (BM25), Hybrid (RRF)
-│   ├── stores/         # DuckDB (FLOAT[768] + HNSW VSS) et AlloyDB (GCP)
-│   ├── tools/          # Outils ADK : hybrid_query, hybrid_list_drive...
-│   └── benchmark/      # Évaluation 90 combinaisons (MRR, nDCG, Recall, Precision)
-│
 ├── shared/
-│   ├── query_rewriter.py   # Réécriture sémantique des queries (gemini-2.0-flash)
-│   └── index_resolver.py   # Résolution automatique des index via Gemini Flash
+│   ├── brand.py            # ★ Registre des profils de marque — source unique
+│   │                       #   identité, thème, polices, prompts, rôles, BDD,
+│   │                       #   taxonomie SAV image, corpus de démonstration
+│   ├── role_permissions.py # RBAC : par index (nom) et par chunk (audience_role)
+│   ├── index_resolver.py   # Choix automatique des index via Gemini Flash
+│   ├── query_rewriter.py   # Réécriture sémantique des questions
+│   └── gen_streamlit_config.py  # Génère .streamlit/config.toml depuis la marque
 │
-├── ui/                 # Interface Streamlit (5 pages)
-│   ├── app.py
-│   ├── pages/
-│   │   ├── 1_Agent_Chat.py       # Chat avec l'agent ADK
-│   │   ├── 2_RAG_Comparison.py   # Comparaison Vertex vs Hybrid en parallèle
-│   │   ├── 3_Index_Manager.py    # Gestion des index Hybrid
-│   │   ├── 4_Benchmark.py        # Visualisation résultats benchmark
-│   │   └── 5_Simple_Chat.py      # Chat simplifié (toggle RAG on/off)
-│   ├── services/
-│   │   ├── vertex_service.py     # Wrapper Vertex AI (query, direct_query, synthesize)
-│   │   ├── hybrid_service.py     # Wrapper Hybrid RAG (query, resolve_indexes)
-│   │   └── session_store.py      # Sessions de comparaison (DuckDB)
-│   └── components/     # Composants réutilisables (source_card, chat_message...)
+├── hybrid/                 # Pipeline de recherche (local, DuckDB)
+│   ├── config.py           # Chunking, embeddings, RRF, chemins (issus de brand)
+│   ├── embeddings/         # minilm-384, mpnet-768, e5-base/large, bge-m3, vertex
+│   ├── ingestion/
+│   │   ├── atelier_map.py  # Chemin de dossier → index + dimensions (partagé)
+│   │   ├── local_ingest.py # Ingestion depuis le disque
+│   │   ├── extractor.py    # Extraction Drive (PDF, Docx, Xlsx, Pptx, Google Docs)
+│   │   ├── chunker.py      # Découpe par tokens du modèle d'embedding
+│   │   └── metadata.py     # Langue, domaine, étiquettes, dimensions atelier
+│   ├── retrieval/          # Dense (HNSW), Sparse (BM25), fusion RRF, filtres
+│   ├── stores/             # DuckDB (FLOAT[768] + VSS/FTS) et AlloyDB
+│   └── tools/              # Outils ADK : hybrid_query, hybrid_add_data_atelier…
 │
-├── docs/
-│   └── embedding_models.md  # Documentation modèles, chunking, métriques
+├── vision/                 # Analyse d'image SAV (Gemini via Vertex AI)
+│   ├── sav.py              # Lecture d'une photo : produit, dommages, éléments
+│   ├── uploads.py          # Stockage des photos + références cloisonnées par user
+│   ├── client.py           # Client google-genai + reprise sur quota
+│   └── config.py           # Modèle, tailles d'image, dossier de dépôt
 │
-├── run_ui.py           # Lanceur Streamlit
+├── rag_agent/              # Agent conversationnel (Google ADK)
+│   ├── agent.py            # Instruction + outils (lecture / admin / image)
+│   ├── runtime_context.py  # Rôle et identité de l'appelant, hors de portée du prompt
+│   └── tools/              # sav_image_tools, get_document_content, compare_documents…
+│
+├── ui/                     # Interface Streamlit
+│   ├── app.py              # Router, warmup, purge des dépôts
+│   ├── auth.py             # Authentification PBKDF2, une base de comptes par marque
+│   ├── pages/              # Login, Accueil, How RAG Works, RAG Demo,
+│   │                       # Knowledge Base, Simple Chat, Agent Chat, Administration
+│   ├── components/
+│   │   ├── lux_style.py    # ★ Langage visuel partagé (piloté par la marque)
+│   │   ├── sav_sheet.py    # Fiche d'atelier — rendu d'une analyse photo
+│   │   ├── detail_panel.py # Panneau unique : sources, passages, outils
+│   │   └── …               # chat_message, answer_renderer, sidebar_auth, brand_header
+│   └── services/           # agent_runner, hybrid_service, chat_store
+│
+├── scripts/
+│   ├── ingest_local.py     # Ingérer un corpus depuis le disque
+│   ├── ingest_drive.py     # Ingérer l'arborescence Drive de la marque
+│   ├── diag_bm25.py        # Diagnostiquer la recherche plein texte
+│   └── seed_admin.py       # Créer le premier compte administrateur
+│
+├── docs/                   # embedding_models.md, business_metadata.md
+├── run_ui.py
 └── requirements.txt
 ```
 
@@ -98,7 +121,7 @@ GOOGLE_CLOUD_LOCATION=europe-west1
 ```python
 PROJECT_ID              = "knowledge-base-agent-485813"
 LOCATION                = "europe-west1"
-MODEL                   = "gemini-2.5-pro"
+MODEL                   = "gemini-2.5-flash"   # ou gemini-2.5-pro
 DEFAULT_TOP_K           = 10
 DEFAULT_DISTANCE_THRESHOLD = 0.5
 DEFAULT_EMBEDDING_MODEL = "publishers/google/models/text-embedding-005"
@@ -107,29 +130,63 @@ DEFAULT_EMBEDDING_MODEL = "publishers/google/models/text-embedding-005"
 ### 4. Paramètres Hybrid RAG (`hybrid/config.py`)
 
 ```python
-ENV                     = "local"          # "local" → DuckDB | "gcp" → AlloyDB pour prod
-DUCKDB_PATH             = "hybrid/data/hybrid.duckdb"
-DRIVE_ROOT_FOLDER       = "Insight Factory - RAG"  # dossier racine Drive
-DEFAULT_EMBEDDING_MODEL = "mpnet-768"
-CHUNK_SIZE              = 384              # en tokens (= max_seq_length du modèle)
-CHUNK_OVERLAP           = 64              # en tokens
+ENV                     = "local"       # "local" → DuckDB | "gcp" → AlloyDB
+DEFAULT_EMBEDDING_MODEL = "e5-base-768"
+CHUNK_SIZE              = 320           # en tokens — voir « Chunking » plus bas
+CHUNK_OVERLAP           = 32            # en tokens
 DENSE_WEIGHT            = 0.7
 SPARSE_WEIGHT           = 0.3
+RRF_DENSE_GATED         = False         # True = écarte les trouvailles BM25 seules
+DEDUP_CONTENT           = True          # fusionne les passages identiques
+
+# DUCKDB_PATH et DRIVE_ROOT_FOLDER ne sont pas définis ici : ils viennent
+# du profil de marque actif (shared/brand.py), pour que chaque client garde
+# sa propre base et son propre dossier Drive.
 ```
 
 `DRIVE_ROOT_FOLDER` est le point d'entrée de toutes les recherches Drive. La recherche de dossiers clients est toujours restreinte à ses enfants directs, évitant les collisions de noms entre clients.
 
 ---
 
+## Profils de marque
+
+Tout ce qui distingue un client vit dans `shared/brand.py` : nom, sous-titre,
+thème et polices, fragments de prompt, rôles et règles d'accès, dossier Drive,
+fichier DuckDB, base de comptes. Quatre profils sont fournis — `hermes`,
+`indica`, `lacoste`, `activate` — sélectionnés par `BRAND_PROFILE`
+(défaut : `hermes`).
+
+Chaque profil a **sa propre base de connaissance et ses propres comptes** : les
+données ne se mélangent jamais d'un client à l'autre.
+
+Ajouter une marque = copier un bloc `BrandProfile(...)`, l'enregistrer dans
+`PROFILES`. Rien d'autre à modifier.
+
+---
+
 ## Lancer l'interface Streamlit
 
-```bash
-python run_ui.py
-# ou directement :
-streamlit run ui/app.py
+```cmd
+set BRAND_PROFILE=hermes
+rag_venv\Scripts\python.exe -m shared.gen_streamlit_config
+rag_venv\Scripts\streamlit.exe run ui\app.py
 ```
 
+```bash
+# bash / Linux
+BRAND_PROFILE=hermes python -m shared.gen_streamlit_config
+BRAND_PROFILE=hermes streamlit run ui/app.py
+```
+
+La deuxième ligne génère `.streamlit/config.toml` (couleurs et polices de la
+marque). **À rejouer à chaque changement de `BRAND_PROFILE`**, sinon Streamlit
+conserve le thème précédent.
+
 L'interface s'ouvre sur `http://localhost:8501`.
+
+> **Une seule instance à la fois.** DuckDB n'autorise qu'un processus écrivain :
+> une seconde application lancée en parallèle verra une base vide, sans erreur
+> explicite.
 
 ---
 
@@ -202,6 +259,79 @@ L'ingestion et le listing parcourent l'**arborescence complète** (récursif, pa
 
 ---
 
+## Ingestion « atelier » — un index par domaine, le reste en métadonnées
+
+Un document se qualifie sur plusieurs axes : domaine, ligne de produit,
+matière, zone géographique, public destinataire. Les encoder tous dans le nom
+de l'index ferait exploser leur nombre.
+
+**Seul l'axe sur lequel on route porte le nom de l'index** — le domaine, parce
+que c'est de lui que parle la question. Les autres dimensions deviennent des
+colonnes filtrables. Ajouter une zone ou une ligne produit devient une valeur,
+pas une restructuration.
+
+L'arborescence Drive reste hiérarchique pour ceux qui y déposent ; l'ingestion
+l'aplatit :
+
+```
+Rag_hermes / <LigneProduit> / <Domaine> / [<Zone>] / fichier
+              │               │            └ zone            → métadonnée
+              │               └ domaine                      → NOM D'INDEX
+              └ ligne_produit  (« _Transverse » = aucune)     → métadonnée
+_meta.yaml (audience_role, matiere) — hérité, le plus proche l'emporte
+```
+
+Colonnes ajoutées au schéma : `ligne_produit`, `zone`, `audience_role[]`,
+`matiere[]`. Toutes nullables, avec migration automatique des tables
+existantes : les autres profils ne changent pas de comportement.
+
+```cmd
+rag_venv\Scripts\python.exe -m scripts.ingest_drive            :: depuis Drive
+rag_venv\Scripts\python.exe -m scripts.ingest_local "<chemin>" :: depuis le disque
+```
+
+Les deux sources partagent le même mapping (`hybrid/ingestion/atelier_map.py`),
+donc produisent des index identiques.
+
+---
+
+## Contrôle d'accès (RBAC)
+
+Deux niveaux, tous deux définis par marque dans `shared/brand.py` :
+
+| Niveau | Champ | Portée |
+|---|---|---|
+| Par index | `role_keywords` | mots-clés testés sur le nom de l'index |
+| Par chunk | `role_audience` | valeurs `audience_role` portées par le passage |
+
+Le second est le plus fin : un même index peut contenir des passages réservés à
+l'atelier et d'autres ouverts aux conseillers. Un rôle inconnu retombe sur le
+rôle par défaut — jamais sur un accès total.
+
+Le rôle de l'appelant transite par `rag_agent/runtime_context.py`, posé par le
+runner sur le fil d'exécution : le prompt de l'agent ne peut pas le contourner.
+
+---
+
+## Analyse d'image SAV
+
+Une photo déposée dans le chat est lue avant la recherche : quel produit, quels
+dommages, quels éléments récupérables. Le vocabulaire vient du profil de marque
+(`vision_product_lines`, `vision_materials`, `vision_damage_types`,
+`vision_components`), pas du modèle.
+
+Le résultat est présenté comme une **fiche d'atelier**, puis l'agent enchaîne
+sur la base documentaire pour la procédure, la garantie et les délais.
+
+Frontière volontaire : la photo établit des **observations** ; tarif, délai,
+couverture de garantie et verdict d'authenticité restent tirés des documents.
+
+Les outils (`sav_analyze_image`, `sav_list_images`) ne sont enregistrés que pour
+les marques ayant défini cette taxonomie — sinon l'agent n'annonce pas une
+capacité qu'il refuserait.
+
+---
+
 ## Résolution automatique des index
 
 Avant chaque requête multi-index, `shared/index_resolver.py` détermine via Gemini Flash quels index interroger en fonction de la query :
@@ -209,7 +339,7 @@ Avant chaque requête multi-index, `shared/index_resolver.py` détermine via Gem
 - Si la query mentionne un client précis → index correspondant uniquement
 - Si la query est générale ou comparative → tous les index
 
-Utilisé par l'outil `hybrid_query`, la page Simple Chat et la page Comparaison RAG.
+Utilisé par l'outil `hybrid_query`, la page Simple Chat et l'agent.
 
 ---
 
@@ -274,13 +404,22 @@ Le schema `FLOAT[768]` (fixed-size array) est requis par HNSW. L'index est recon
 
 ## Chunking
 
-Le chunking est réalisé en **tokens réels** via le tokenizer HuggingFace du modèle d'embedding (mpnet-768 : `max_seq_length = 384`). Chaque chunk utilise 100% de la fenêtre du modèle — aucune approximation en caractères.
+Le chunking est réalisé en **tokens réels**, via le tokenizer HuggingFace du
+modèle d'embedding — aucune approximation en caractères.
 
 | Stratégie | Description | Usage |
 |---|---|---|
-| `fixed` (défaut) | 384 tokens, overlap 64, tokenizer HuggingFace | Production générale |
-| `semantic` | Coupure aux ruptures sémantiques (seuil cosinus 0.85) | CR de réunion, textes narratifs |
+| `fixed` (défaut) | 320 tokens, overlap 32 | Production générale |
+| `semantic` | Coupure aux ruptures de sens (seuil cosinus 0.85) | Comptes rendus, textes narratifs |
 | `hierarchical` | Chunks enfants 256 + parents 1024 | Documents longs multi-niveaux |
+
+**Pourquoi 320 et non le maximum du modèle.** Avec `CHUNK_SIZE = 0`, le
+découpage prend le `max_seq_length` du modèle (510 pour `e5-base-768`). C'est
+le **plafond encodable**, pas l'optimum : un chunk plein comprime ~380 mots
+dans un seul vecteur de 768 dimensions, et une question précise remonte alors
+un bloc majoritairement hors sujet. Mesuré sur le corpus hermès : 510 tokens
+donnent 186 chunks (~2,5 par document), 320 en donnent 285 (~3,9) — une
+granularité nettement meilleure pour un surcoût négligeable.
 
 ---
 
@@ -321,7 +460,7 @@ python -m hybrid.benchmark.eval_retrieval --models minilm-384 mpnet-768
 | Recall@10 | Tous les bons chunks sont-ils retrouvés ? |
 | Precision@10 | Parmi les 10 résultats, combien sont pertinents ? |
 
-Les résultats sont visualisables dans la page **Benchmark** de l'UI Streamlit (`4_Benchmark.py`).
+Les résultats sont écrits dans `hybrid/data/benchmark_results.json`.
 
 ---
 
@@ -329,27 +468,49 @@ Les résultats sont visualisables dans la page **Benchmark** de l'UI Streamlit (
 
 | Page | Description |
 |---|---|
-| **Agent Chat** | Chat conversationnel avec l'agent ADK (gemini-2.5-pro), avec affichage des appels d'outils |
-| **Comparaison RAG** | Vertex AI vs Hybrid en parallèle sur la même question — sessions persistées en DuckDB, contextes cloisonnés par pipeline, ordre chronologique |
-| **Index Manager** | Création, alimentation et suppression des index Hybrid |
-| **Benchmark** | Visualisation des résultats benchmark (podium, leaderboard, graphiques, heatmap) |
-| **Simple Chat** | Chat simplifié pour utilisateurs non-techniques — toggle RAG on/off, choix Vertex AI ou Hybrid |
+| **Accueil** | Ce que fait l'application, ce que contient la base |
+| **How RAG Works** | Explication animée : d'un document déposé à une réponse citée |
+| **RAG Demo** | La même question par le sens, par les mots exacts, puis combinée — scores et passages à l'appui |
+| **Knowledge Base** | Création, alimentation et suppression des index |
+| **Simple Chat** | Échange direct, avec ou sans consultation de la base |
+| **Agent Chat** | L'agent choisit les index, cite ses sources ; photo joignable au message |
+| **Administration** | Gestion des comptes et des rôles (admin) |
+
+L'apparence est unifiée par `ui/components/lux_style.py`, injecté depuis la
+barre latérale : aucune page ne peut diverger en oubliant un appel. Couleurs et
+polices proviennent du profil actif, donc chaque marque hérite de la même
+structure dans sa propre palette.
 
 ---
 
 ## Structure des fichiers de données
 
+Tout est ignoré par git, et **cloisonné par marque** : chaque profil déclare son
+propre `duckdb_path` et son propre `users_db_path`.
+
 ```
 hybrid/data/
-├── hybrid.duckdb              # Index Hybrid RAG (ignoré par git)
-└── benchmark_results.json     # Résultats du dernier benchmark
+├── hermes_hybrid.duckdb       # Base de connaissance du profil hermes
+├── hybrid.duckdb              # Profil indica
+└── benchmark_results.json
 
-ui/data/                       # Données UI (ignorées par git)
-├── comparaison/
-│   └── comparaison.duckdb     # Sessions de comparaison RAG (DuckDB)
+Activate_db/
+└── lacoste_hybrid.duckdb      # Profils lacoste et activate
+
+ui/data/
+├── hermes_users.db            # Comptes du profil hermes (SQLite, PBKDF2)
+├── users.db                   # Comptes des profils indica / activate
+├── uploads/                   # Photos déposées dans le chat (purgées au démarrage)
+├── chat/chat.duckdb           # Historique des conversations
 └── agent_display/
-    └── {session_id}.json      # Affichage enrichi des sessions agent
+
+.streamlit/config.toml         # Thème généré depuis shared/brand.py
 ```
+
+Le premier compte administrateur est créé automatiquement à la création d'une
+base de comptes, à partir de `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_NAME` /
+`DEFAULT_ADMIN_PASSWORD` (dans `rag_agent/.env`, jamais en dur). Sans mot de
+passe renseigné, aucun compte n'est créé.
 
 ---
 

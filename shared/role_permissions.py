@@ -97,3 +97,51 @@ def role_has_full_access(role: str | None) -> bool:
     full-access if the default role itself is.
     """
     return _keywords_for(role) is None
+
+
+# ── Chunk-level RBAC (atelier model) ──────────────────────────────────────────
+# Finer than index-name filtering: a chunk carries an ``audience_role`` list
+# (set at ingestion from _meta.yaml). A role sees a chunk when the brand maps
+# that role to one of the chunk's audience_role values. Brands that don't define
+# ``role_audience`` fall back to the index-name keyword model (no chunk gating).
+
+ROLE_AUDIENCE: dict[str, tuple[str, ...] | None] = dict(_BRAND.role_audience)
+
+
+def _audience_for(role: str | None) -> tuple[str, ...] | None | object:
+    """Allowed audience_role values for *role*.
+
+    Returns ``None`` for full access, a tuple of allowed values, or the
+    ``_MISSING`` sentinel when the brand defines no chunk-level RBAC for this
+    role (caller should then skip chunk gating).
+    """
+    if not ROLE_AUDIENCE:
+        return _MISSING
+    val = ROLE_AUDIENCE.get((role or DEFAULT_ROLE).lower(), _MISSING)
+    if val is _MISSING:
+        val = ROLE_AUDIENCE.get(DEFAULT_ROLE, _MISSING)
+    return val
+
+
+def chunk_visible_for_role(chunk: dict, role: str | None) -> bool:
+    """Return True if *role* may see *chunk* under the atelier RBAC.
+
+    - Brand has no ``role_audience`` → no chunk gating, always visible.
+    - Role maps to ``None`` → full access.
+    - Chunk has an empty ``audience_role`` → treated as open (visible).
+    - Otherwise visible iff the role's allowed set intersects the chunk's
+      ``audience_role``.
+    """
+    allowed = _audience_for(role)
+    if allowed is _MISSING or allowed is None:
+        return True
+    chunk_roles = [r.lower() for r in (chunk.get("audience_role") or [])]
+    if not chunk_roles:
+        return True
+    allowed_set = {a.lower() for a in allowed}
+    return bool(allowed_set & set(chunk_roles))
+
+
+def filter_chunks_for_role(chunks: list[dict], role: str | None) -> list[dict]:
+    """Filter a retrieved chunk list down to those visible to *role*."""
+    return [c for c in chunks if chunk_visible_for_role(c, role)]

@@ -13,6 +13,7 @@ Performance tiers (dense search, in order):
 - Last resort → NumPy vectorised cosine similarity
 """
 
+import logging
 import os
 import re
 from typing import Optional
@@ -48,6 +49,10 @@ CREATE TABLE IF NOT EXISTS {table} (
     domaine         VARCHAR,
     langue          VARCHAR,
     tags            VARCHAR[],
+    ligne_produit   VARCHAR,
+    zone            VARCHAR,
+    audience_role   VARCHAR[],
+    matiere         VARCHAR[],
     chunk_index     INTEGER,
     chunk_total     INTEGER,
     chunk_strategy  VARCHAR,
@@ -57,7 +62,30 @@ CREATE TABLE IF NOT EXISTS {table} (
 )
 """
 
-_INSERT_SQL = "INSERT OR REPLACE INTO {table} VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+# Columns added after the original schema — kept here so existing tables
+# (ingested before the atelier model) can be migrated in place with a cheap
+# idempotent ALTER. Order matches the INSERT below.
+_ATELIER_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("ligne_produit", "VARCHAR"),
+    ("zone", "VARCHAR"),
+    ("audience_role", "VARCHAR[]"),
+    ("matiere", "VARCHAR[]"),
+)
+
+# Named columns (not positional VALUES) so the INSERT is independent of the
+# physical column order — a table migrated with ALTER ADD COLUMN has the new
+# columns appended at the end, a freshly-created table has them mid-schema.
+_INSERT_COLUMNS = (
+    "id", "index_name", "content", "embedding", "source_url", "file_name",
+    "file_type", "created_at", "updated_at", "author", "domaine", "langue",
+    "tags", "ligne_produit", "zone", "audience_role", "matiere",
+    "chunk_index", "chunk_total", "chunk_strategy", "parent_chunk_id",
+    "embedding_model", "embedding_dim",
+)
+_INSERT_SQL = (
+    "INSERT OR REPLACE INTO {table} (" + ", ".join(_INSERT_COLUMNS) + ") VALUES ("
+    + ", ".join("?" for _ in _INSERT_COLUMNS) + ")"
+)
 
 
 def _sanitize(name: str) -> str:
@@ -251,6 +279,7 @@ class DuckDBStore(BaseStore):
 
         for index_name, index_chunks in by_index.items():
             table = self._tbl(index_name)
+            self._ensure_atelier_columns(table)   # migrate old tables in place
             sql = _INSERT_SQL.format(table=table)
             for chunk in index_chunks:
                 conn.execute(sql, [
@@ -267,6 +296,10 @@ class DuckDBStore(BaseStore):
                     chunk.get("domaine", ""),
                     chunk.get("langue", ""),
                     chunk.get("tags", []),
+                    chunk.get("ligne_produit", ""),
+                    chunk.get("zone", ""),
+                    chunk.get("audience_role", []),
+                    chunk.get("matiere", []),
                     chunk.get("chunk_index", 0),
                     chunk.get("chunk_total", 1),
                     chunk.get("chunk_strategy", "fixed"),
@@ -276,6 +309,19 @@ class DuckDBStore(BaseStore):
                 ])
             self._rebuild_fts(index_name)
             self._rebuild_hnsw(index_name)
+
+    def _ensure_atelier_columns(self, table: str) -> None:
+        """Add the atelier metadata columns to *table* if missing (idempotent).
+
+        Lets tables created before the atelier model accept the extended INSERT
+        without a manual migration. DuckDB's ADD COLUMN IF NOT EXISTS is a no-op
+        when the column already exists, so this is safe to call on every insert.
+        """
+        conn = self._get_conn()
+        for col, sqltype in _ATELIER_COLUMNS:
+            conn.execute(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {sqltype}"
+            )
 
     def dense_search(
         self,
@@ -394,17 +440,42 @@ class DuckDBStore(BaseStore):
             """
             rows = conn.execute(sql, [query] + params + [top_k]).fetchall()
             return self._rows_to_dicts(rows, conn)
-        except Exception:
-            # FTS unavailable — fall back to ILIKE
+        except Exception as exc:
+            # FTS unavailable (extension missing, index never built, …).
+            #
+            # The previous fallback matched the WHOLE query string with a single
+            # ILIKE, so any question longer than one word silently returned zero
+            # rows — indistinguishable from "BM25 found nothing". It also
+            # swallowed the error, leaving nothing to diagnose. Now the failure
+            # is logged, and the fallback matches individual terms so keyword
+            # search degrades instead of disappearing.
+            logging.warning(
+                "FTS unavailable on '%s' (%s) — falling back to term matching. "
+                "Rebuild with PRAGMA create_fts_index if this persists.",
+                table, exc,
+            )
+            terms = [t for t in re.split(r"\W+", query) if len(t) > 2][:8]
+            if not terms:
+                return []
+
             where_no_prefix = where_clause.replace("c.", "")
+            # Rank by how many query terms a chunk contains — a poor man's BM25,
+            # but it puts the most on-topic passages first instead of none.
+            score_expr = " + ".join(
+                "CASE WHEN content ILIKE ? THEN 1 ELSE 0 END" for _ in terms
+            )
+            like_params = [f"%{t}%" for t in terms]
             sql = f"""
-                SELECT *, 1.0 AS score
+                SELECT *, ({score_expr}) AS score
                 FROM {table}
-                WHERE content ILIKE ?
+                WHERE ({" OR ".join("content ILIKE ?" for _ in terms)})
                 {where_no_prefix}
+                ORDER BY score DESC
                 LIMIT ?
             """
-            rows = conn.execute(sql, [f"%{query}%"] + params + [top_k]).fetchall()
+            rows = conn.execute(
+                sql, like_params + like_params + params + [top_k]
+            ).fetchall()
             return self._rows_to_dicts(rows, conn)
 
     def delete_chunks_by_file_name(self, file_name: str, index_name: str) -> None:

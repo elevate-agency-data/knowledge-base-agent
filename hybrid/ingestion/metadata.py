@@ -19,24 +19,50 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 
+# A sentence: a long-enough run of text closed by terminal punctuation. Table
+# rows ("Birkin 35 | cuir_togo | Noir") carry no terminal punctuation, so a
+# spreadsheet yields no sentences at all — which is exactly what we want.
+_SENTENCE_RE = re.compile(r"[^.!?\n]{25,}?[.!?](?=\s|$)")
+
+# Below this much prose, langdetect's answer is noise rather than a reading.
+_MIN_PROSE_CHARS = 300
+
+
+def _prose_only(text: str) -> str:
+    """Keep only sentence-like content, dropping tabular and keyword lines."""
+    return " ".join(
+        s.strip() for s in _SENTENCE_RE.findall(text) if len(s.split()) >= 6
+    )
+
+
 def detect_language(text: str) -> str:
     """
-    Detect the dominant language of *text*.
+    Detect the dominant language of *text*, or abstain.
 
-    Uses the ``langdetect`` library.  Returns ``"unknown"`` on failure.
+    Detection runs on the **prose** part of the text only. Spreadsheets and
+    reference tables extract to rows of proper nouns and codes with no grammar,
+    and ``langdetect`` guesses wildly on those — measured on a 73-file corpus it
+    labelled French catalogues as Dutch, Spanish and English with probability
+    1.00. Since a wrong language silently breaks the ``langue`` filter, we
+    return ``"unknown"`` rather than a confident-sounding guess.
 
     Args:
-        text: Input text (at least ~50 characters for reliable results).
+        text: Input text. Needs ~300 characters of actual sentences.
 
     Returns:
-        ISO 639-1 language code string (e.g. ``"fr"``, ``"en"``),
-        or ``"unknown"`` if detection fails.
+        ISO 639-1 code (e.g. ``"fr"``, ``"en"``), or ``"unknown"`` when the
+        text carries too little prose to judge.
     """
     if not text or len(text.strip()) < 20:
         return "unknown"
+
+    prose = _prose_only(text)
+    if len(prose) < _MIN_PROSE_CHARS:
+        return "unknown"
+
     try:
         from langdetect import detect
-        return detect(text)
+        return detect(prose[:5000])
     except Exception:
         return "unknown"
 
@@ -154,6 +180,10 @@ def build_metadata(
     embedding_dim: int = 0,
     doc_language: str = "",
     doc_domaine: str = "",
+    ligne_produit: str = "",
+    zone: str = "",
+    audience_role: Optional[list[str]] = None,
+    matiere: Optional[list[str]] = None,
 ) -> dict:
     """
     Assemble the full metadata dict for a chunk ready to be inserted.
@@ -204,6 +234,12 @@ def build_metadata(
         "domaine":          domain,
         "langue":           lang,
         "tags":             tags,
+        # Atelier dimensions (from the Drive path + _meta.yaml). Empty defaults
+        # keep back-compat for callers that don't supply them (Activate/Indica).
+        "ligne_produit":    ligne_produit or "",
+        "zone":             zone or "",
+        "audience_role":    audience_role or [],
+        "matiere":          matiere or [],
         # Chunk position
         "chunk_index":      chunk.get("chunk_index", 0),
         "chunk_total":      chunk.get("chunk_total", 1),

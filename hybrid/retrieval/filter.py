@@ -21,6 +21,10 @@ def build_filters(
     date_to: Optional[str] = None,
     tags: Optional[list[str]] = None,
     index_name: Optional[str] = None,
+    ligne_produit: Optional[str] = None,
+    zone: Optional[str] = None,
+    matiere: Optional[list[str]] = None,
+    audience_role: Optional[str] = None,
 ) -> dict:
     """
     Build a normalised filters dict from individual keyword arguments.
@@ -61,6 +65,15 @@ def build_filters(
         filters["tags"] = [t.lower() for t in tags if t]
     if index_name:
         filters["index_name"] = index_name
+    # Atelier dimensions
+    if ligne_produit:
+        filters["ligne_produit"] = ligne_produit
+    if zone:
+        filters["zone"] = zone
+    if matiere:
+        filters["matiere"] = [m.lower() for m in matiere if m]
+    if audience_role:
+        filters["audience_role"] = audience_role
 
     return filters
 
@@ -107,10 +120,26 @@ def _matches(chunk: dict, filters: dict) -> bool:
         Boolean match result.
     """
     # Simple equality filters (index_name excluded — handled by table routing)
-    for field in ("file_type", "domaine", "langue", "author"):
+    for field in ("file_type", "domaine", "langue", "author",
+                  "ligne_produit", "zone"):
         if field in filters:
             if chunk.get(field) != filters[field]:
                 return False
+
+    # Matiere filter: chunk must carry AT LEAST ONE of the requested materials
+    if "matiere" in filters:
+        want = set(m.lower() for m in filters["matiere"])
+        have = set(m.lower() for m in (chunk.get("matiere") or []))
+        if not (want & have):
+            return False
+
+    # Audience-role filter (RBAC): the requested role must be in the chunk's
+    # audience_role list. A chunk with no audience_role is treated as open.
+    if "audience_role" in filters:
+        role = filters["audience_role"].lower()
+        roles = [r.lower() for r in (chunk.get("audience_role") or [])]
+        if roles and role not in roles:
+            return False
 
     # Date range filters
     if "date_from" in filters or "date_to" in filters:

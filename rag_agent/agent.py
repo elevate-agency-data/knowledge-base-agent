@@ -20,6 +20,8 @@ from hybrid.tools.hybrid_list_indexes import hybrid_list_indexes
 from hybrid.tools.hybrid_delete_index import hybrid_delete_index
 from hybrid.tools.hybrid_index_info   import hybrid_index_info
 
+from .tools.sav_image_tools import sav_analyze_image, sav_list_images
+
 # ── Tool sets ─────────────────────────────────────────────────────────────────
 
 _READ_TOOLS = [
@@ -32,6 +34,12 @@ _READ_TOOLS = [
     hybrid_list_indexes,
     hybrid_index_info,
 ]
+
+# Image tools only exist for brands that define an SAV taxonomy (vision_* in
+# shared/brand.py). Registering them for a brand without one would advertise a
+# capability every call then refuses.
+_VISION_TOOLS = [sav_analyze_image, sav_list_images] if BRAND.has_vision else []
+_READ_TOOLS += _VISION_TOOLS
 
 _ADMIN_TOOLS = [
     hybrid_create_index,
@@ -206,6 +214,67 @@ If the retrieved documents do not contain the information → say so explicitly:
 "I don't have this information in our knowledge base."
 NEVER fill gaps with your general knowledge.
 """
+
+
+# ── SAV image analysis (only for brands with a vision taxonomy) ───────────────
+
+_VISION_INSTRUCTION = f"""
+
+---
+
+## Photo analysis (SAV intake)
+
+Users can attach a photo of a client's item. When they do, its reference is
+shown in the message as `img_xxxxxxxx`.
+
+### Tools
+- `sav_analyze_image(image_ref, client_note)` — identifies the product, lists
+  visible damage, and states which components are reusable / to replace / to
+  evaluate in the workshop
+- `sav_list_images()` — the photos this user has uploaded, if you lack the ref
+
+### Workflow — analyse, THEN search
+1. Call `sav_analyze_image` with the ref. Pass whatever the user said about the
+   item as `client_note`.
+2. Take the `recommended_queries` it returns and run them through
+   `hybrid_query`. The photo says *what the item is and what is broken*; only
+   the knowledge base says *what the Maison does about it*.
+3. Answer by combining the two: the visual assessment, then the grounded
+   procedure, warranty position and delays — with citations.
+
+### Never cite the photo or the tool
+The citation format `(INDEX - FileName)` is for knowledge-base documents ONLY.
+A photo reading is an observation, not a document, so it is **never** cited:
+write "d'après la photo" / "sur le visuel" in plain words instead.
+
+NEVER write a tool name, a response key or an identifier in the answer —
+`(sav_analyze_image_response)`, `(sav_analyze_image)`, `(tool response)` and
+anything of that kind are forbidden. They are plumbing, and the advisor reads
+this answer to a client.
+
+### What the photo may and may not establish
+The image is a legitimate source for **observations** — the product line, the
+materials, the damage seen, the state of a component. Reporting what is visible
+is NOT a breach of the documents-only rule above.
+
+Everything else stays document-grounded. Never state from a photo:
+- a repair delay, a price, or a tariff
+- whether the item is covered by the warranty
+- an authentication verdict
+- a repair procedure or a workshop gesture
+
+Those must come from `hybrid_query`. If the knowledge base has nothing on them,
+say so rather than filling the gap.
+
+### Register
+A photo assessment is an intake opinion, not a verdict. Keep the model's
+confidence and its `limitations` visible in your answer — say plainly when a
+single photo cannot settle something and an in-boutique diagnosis is needed.
+Never guess a model name or a serial number that is not readable.
+"""
+
+if BRAND.has_vision:
+    _BASE_INSTRUCTION += _VISION_INSTRUCTION
 
 
 # ── User agent (read-only — query, inspect, compare) ──────────────────────────

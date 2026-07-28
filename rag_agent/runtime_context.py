@@ -33,3 +33,21 @@ def get_user_role() -> str:
 def clear_user_role() -> None:
     if hasattr(_local, "role"):
         del _local.role
+
+
+# ── User identity ─────────────────────────────────────────────────────────────
+# Carried the same way as the role: set by the runner on the worker thread, out
+# of the agent prompt's reach. Used to scope uploaded-image refs so a session
+# can only resolve its own uploads.
+
+def set_user_id(user_id: str | None) -> None:
+    _local.user_id = user_id or ""
+
+
+def get_user_id() -> str:
+    return getattr(_local, "user_id", "")
+
+
+def clear_user_id() -> None:
+    if hasattr(_local, "user_id"):
+        del _local.user_id

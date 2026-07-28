@@ -24,10 +24,12 @@ _DB_PATH  = Path(__file__).parent.parent.parent / "rag_agent" / ".adk" / "sessio
 
 # ── Async helper ──────────────────────────────────────────────────────────────
 
-def _run_coroutine(coro, user_role: str | None = None) -> Any:
+def _run_coroutine(coro, user_role: str | None = None,
+                   user_id: str | None = None) -> Any:
     """
-    Run *coro* in a fresh thread+event loop, propagating *user_role*
-    into the worker thread's runtime context so tools can enforce RBAC.
+    Run *coro* in a fresh thread+event loop, propagating *user_role* and
+    *user_id* into the worker thread's runtime context so tools can enforce
+    RBAC and scope uploaded-image refs to their owner.
     """
     result: list[Any]       = [None]
     error:  list[Exception] = [None]
@@ -36,6 +38,9 @@ def _run_coroutine(coro, user_role: str | None = None) -> Any:
         if user_role is not None:
             from rag_agent.runtime_context import set_user_role
             set_user_role(user_role)
+        if user_id is not None:
+            from rag_agent.runtime_context import set_user_id
+            set_user_id(user_id)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -148,6 +153,8 @@ class AgentRunner:
 
         *user_role* est propagé au thread d'exécution pour que les tools
         (hybrid_list_indexes, hybrid_query) appliquent le filtre RBAC.
+        *user_id* l'est aussi, pour que les tools image ne résolvent que les
+        visuels déposés par cet utilisateur.
         """
         from google.genai import types
 
@@ -164,7 +171,9 @@ class AgentRunner:
                 raw.append(event)
             return raw
 
-        return self._parse_events(_run_coroutine(_run(), user_role=user_role))
+        return self._parse_events(
+            _run_coroutine(_run(), user_role=user_role, user_id=user_id)
+        )
 
     # ── Event parsing ─────────────────────────────────────────────────────────
 

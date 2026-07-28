@@ -265,12 +265,58 @@ else:
 _matches_json = json.dumps(_matches, ensure_ascii=False)
 
 _doc_name = (up.name if up else f"{_DOC_TITLE[:28]}.pdf")
+_doc_name_json = json.dumps(_doc_name, ensure_ascii=False)
+
+# Vector-store chapter — the brand's business indexes (name, vector count).
+_indexes = [[n, int(c)] for n, c in (ACTIVE.demo_indexes or ())] or [
+    ["Domaine A", 900], ["Domaine B", 640], ["Domaine C", 480],
+    ["Domaine D", 720], ["Domaine E", 530], ["Domaine F", 410],
+]
+_indexes_json = json.dumps(_indexes, ensure_ascii=False)
+
+# Which of those indexes the demo query is routed to (clamped to range).
+_qidx = [i for i in (ACTIVE.demo_query_indexes or (0, 1)) if 0 <= i < len(_indexes)]
+_qidx_json = json.dumps(_qidx or [0])
+
+# Generation chapter — real chunk text, retrieval vs rerank scores, and the
+# prompt the chunks get pasted into. demo_chunks[0] is authored as the answer,
+# so rerank promotes it; retrieval order is left in document order to show the
+# rerank actually reordering.
+_gen_sims = (_emb["full"]["sims"][:len(_DEMO_CHUNKS)] if _emb
+             else [0.86, 0.79, 0.72][:len(_DEMO_CHUNKS)])
+_gen_chunks = [
+    {"label": lbl, "text": txt, "retr": round(float(_gen_sims[i]), 2)}
+    for i, (lbl, txt) in enumerate(_DEMO_CHUNKS)
+]
+# rerank: correct chunk first, then the rest by descending similarity
+_rerank_order = [0] + sorted(
+    [i for i in range(len(_gen_chunks)) if i != 0], key=lambda i: -_gen_sims[i]
+)
+_rerank_vals = [0.98, 0.64, 0.31, 0.18]
+for _rank, _ci in enumerate(_rerank_order):
+    _gen_chunks[_ci]["rerank"] = _rerank_vals[min(_rank, len(_rerank_vals) - 1)]
+    _gen_chunks[_ci]["rank"] = _rank
+# retrieval display order: document order, but ensure it differs from rerank
+# order so the reordering is visible (swap first two if identical)
+_retr_order = list(range(len(_gen_chunks)))
+if _retr_order[:2] == _rerank_order[:2] and len(_retr_order) >= 2:
+    _retr_order[0], _retr_order[1] = _retr_order[1], _retr_order[0]
+_gen = {
+    "query": _DEMO_QUERY,
+    "sys": (f"Tu es l'assistant {ACTIVE.name}. Réponds UNIQUEMENT à partir du "
+            "contexte ci-dessous. Cite tes sources. Si l'information manque, "
+            "dis-le — n'invente rien."),
+    "chunks": _gen_chunks,
+    "retrOrder": _retr_order,
+    "rerankOrder": _rerank_order,
+}
+_gen_json = json.dumps(_gen, ensure_ascii=False)
 
 _STORY = r"""
 <div id="rag-story">
   <button class="fs-btn" id="fsBtn" title="Plein écran">⛶ Plein écran</button>
   <div class="rail"><span data-c="0"></span><span data-c="1"></span><span data-c="2"></span>
-    <span data-c="3"></span><span data-c="4"></span></div>
+    <span data-c="3"></span><span data-c="4"></span><span data-c="5"></span></div>
 
   <!-- 0 intro + ingestion -->
   <section class="chap" data-i="0">
@@ -330,28 +376,97 @@ _STORY = r"""
     </div>
   </section>
 
-  <!-- 3 store -->
-  <section class="chap" data-i="3">
-    <div class="step">04 — Indexation</div>
-    <h2>On stocke les vecteurs</h2>
-    <p class="lead">Embeddings + métadonnées entrent dans une base vectorielle
-       indexée (HNSW), interrogeable en millisecondes.</p>
-    <div class="stage"><div class="db"><div class="db-top"></div>
-      <div class="db-body"><div class="db-rows" id="dbRows"></div></div>
-      <div class="db-bot"></div><div class="db-cap">vector store · HNSW</div></div></div>
+  <!-- 3 store : vector store = plusieurs index de domaine -->
+  <section class="chap tall" data-i="3">
+    <div class="step">04 — Le vector store</div>
+    <h2>Un store, plusieurs index</h2>
+    <p class="lead">Un <b>vector store</b> n'est pas un sac unique de vecteurs :
+       il est découpé en <b>index</b>, un par domaine métier. Chaque vecteur est
+       <b>routé</b> vers son index selon sa catégorie. À l'intérieur, un graphe
+       <b>HNSW</b> relie chaque vecteur à ses plus proches voisins — la recherche
+       saute de voisin en voisin au lieu de tout comparer.</p>
+
+    <div class="vs-wrap">
+      <!-- explications à gauche -->
+      <aside class="vs-explain">
+        <div class="vs-e"><span class="vs-n">1</span>
+          <div><b>Vector store</b><br>le conteneur global, une famille d'index
+          isolés — l'isolation par domaine (et par client) se fait ici.</div></div>
+        <div class="vs-e"><span class="vs-n">2</span>
+          <div><b>Index</b><br>une collection de vecteurs d'un même domaine
+          (+ leurs métadonnées). On n'interroge que les index utiles.</div></div>
+        <div class="vs-e"><span class="vs-n">3</span>
+          <div><b>HNSW</b><br>un graphe de voisinage à l'intérieur de l'index :
+          recherche approximative en O(log n), pas de balayage complet.</div></div>
+      </aside>
+
+      <!-- routage + grille d'index à droite -->
+      <div class="vs-main">
+        <div class="vs-feed" id="vsFeed"></div>
+        <div class="vs-grid" id="vsGrid"></div>
+      </div>
+    </div>
+    <button class="replay" id="replayVs">↻ rejouer le routage</button>
   </section>
 
-  <!-- 4 retrieval -->
-  <section class="chap" data-i="4">
-    <div class="step">05 — Retrieval + génération</div>
-    <h2>Une question retrouve les bons chunks</h2>
-    <p class="lead">La question devient un vecteur, on cherche les plus proches,
-       le LLM répond <b>sur ces sources</b>.</p>
-    <div class="stage retr">
-      <div class="q">« __QUERY__ » <span class="qv" id="qv"></span></div>
-      <div class="matches" id="matches"></div>
-      <div class="answer">Réponse sourcée, citations à l'appui.</div>
+  <!-- 4 search : recherche animée à travers les index du store -->
+  <section class="chap tall" data-i="4">
+    <div class="step">05 — La recherche</div>
+    <h2>Une question traverse le store</h2>
+    <p class="lead">La question devient un <b>vecteur</b>. Le système ne fouille
+       pas tout : il <b>route</b> la requête vers les seuls index pertinents
+       (les autres restent <span style="color:#b0aaa3">grisés</span>), puis
+       <b>parcourt le graphe HNSW</b> de voisin en voisin jusqu'aux vecteurs
+       les plus proches — qui remontent comme résultats.</p>
+
+    <div class="se-query" id="seQuery">
+      <span class="se-qtxt">« __QUERY__ »</span>
+      <span class="se-qvec" id="seQvec"></span>
     </div>
+    <ol class="se-steps" id="seSteps">
+      <li data-s="0"><b>Point d'entrée</b><span>on démarre sur un vecteur au hasard du graphe</span></li>
+      <li data-s="1"><b>Descente</b><span>on saute vers le voisin le plus proche de la question</span></li>
+      <li data-s="2"><b>Vecteur pertinent</b><span>plus aucun voisin n'est plus proche : on s'arrête</span></li>
+      <li data-s="3"><b>Voisinage → résultats</b><span>ses voisins immédiats forment les k candidats</span></li>
+    </ol>
+    <div class="vs-grid" id="seGrid"></div>
+    <div class="se-results" id="seResults"></div>
+    <button class="replay" id="replaySe">↻ relancer la recherche</button>
+  </section>
+
+  <!-- 5 generation : retrieve → rerank → paste into prompt → send -->
+  <section class="chap tall" data-i="5">
+    <div class="step">06 — Génération</div>
+    <h2>Récupérer, coller dans le prompt, envoyer</h2>
+    <p class="lead">Pas de magie : le système <b>récupère</b> les chunks,
+       les <b>reclasse</b> (rerank), <b>colle leur texte</b> dans le prompt,
+       et l'envoie au LLM. Exactement le <b>Ctrl+C / Ctrl+V</b> que tu ferais
+       à la main — en automatique.</p>
+
+    <div class="gen">
+      <div class="gen-lbl"><span class="gen-n">1</span>Chunks récupérés
+        <em id="genPhase">— tri par similarité</em></div>
+      <div class="gen-chunks" id="genChunks"></div>
+
+      <div class="gen-flow" id="flowPrompt">↓ &nbsp;copier le texte&nbsp; ↓</div>
+
+      <div class="gen-lbl"><span class="gen-n">2</span>Injection dans le prompt
+        <span class="paste-badge" id="pasteBadge">📋 Ctrl+V</span></div>
+      <div class="prompt-card" id="promptCard">
+        <div class="pc-line pc-sys"><span class="pc-tag">SYSTEM</span>
+          <span id="pcSys"></span></div>
+        <div class="pc-line pc-ctx"><span class="pc-tag">CONTEXTE</span>
+          <div class="pc-ctx-body" id="pcCtx"></div></div>
+        <div class="pc-line pc-q"><span class="pc-tag">QUESTION</span>
+          <span id="pcQ"></span></div>
+      </div>
+
+      <div class="gen-flow" id="flowSend">↓ &nbsp;envoi au LLM&nbsp; ↓</div>
+
+      <div class="gen-lbl"><span class="gen-n">3</span>Réponse générée</div>
+      <div class="answer" id="genAnswer"></div>
+    </div>
+    <button class="replay" id="replayGen">↻ rejouer</button>
   </section>
 </div>
 
@@ -493,36 +608,168 @@ _STORY = r"""
   .d0{background:__ACCENT__;left:60px;top:70px;}.d1{background:__ACCENT__;left:92px;top:92px;}
   .d2{background:#8a6d3b;left:150px;top:44px;}
 
-  /* db */
-  .db{width:200px;position:relative;opacity:0;transform:translateY(16px);transition:.6s;}
-  .in .db{opacity:1;transform:none;}
-  .db-top{height:22px;border-radius:50%;background:__ACCENT__;}
-  .db-body{background:linear-gradient(90deg,__ACCENT__,#d95f16);height:120px;margin-top:-11px;overflow:hidden;}
-  .db-bot{height:22px;border-radius:50%;background:#c9560f;margin-top:-11px;}
-  .db-cap{text-align:center;font-size:.62rem;color:#8f8b86;margin-top:10px;letter-spacing:.08em;}
-  .db-rows{padding:16px 14px;display:flex;flex-direction:column;gap:7px;}
-  .db-row{height:8px;background:#ffffffbb;border-radius:2px;width:0;transition:width .5s;}
-  .in .db-row{width:100%;}
+  /* vector store */
+  .vs-wrap{display:flex;gap:26px;align-items:flex-start;width:100%;
+    max-width:960px;margin:8px auto 0;flex-wrap:wrap;}
+  .vs-explain{flex:0 0 240px;display:flex;flex-direction:column;gap:14px;}
+  .vs-e{display:flex;gap:11px;align-items:flex-start;font-size:.78rem;
+    line-height:1.45;color:#55504b;opacity:0;transform:translateX(-10px);
+    transition:.5s;}
+  .in .vs-e{opacity:1;transform:none;}
+  .vs-e:nth-child(2){transition-delay:.12s;}
+  .vs-e:nth-child(3){transition-delay:.24s;}
+  .vs-n{flex:0 0 22px;height:22px;border-radius:50%;background:__ACCENT__;
+    color:#fff;font-size:.72rem;font-weight:700;display:flex;
+    align-items:center;justify-content:center;margin-top:1px;}
+  .vs-e b{color:#2b2622;}
+  .vs-main{flex:1 1 380px;min-width:320px;}
+  /* incoming vectors feed */
+  .vs-feed{position:relative;height:34px;margin-bottom:10px;}
+  .vs-tok{position:absolute;top:6px;width:22px;height:14px;border-radius:3px;
+    background:linear-gradient(90deg,__ACCENT__,#d95f16);opacity:0;
+    box-shadow:0 1px 3px #0002;}
+  .vs-tok.fly{animation:vsfly .9s ease-in forwards;}
+  @keyframes vsfly{0%{opacity:0;transform:translateY(-4px) scale(.9);}
+    15%{opacity:1;}100%{opacity:0;transform:translate(var(--dx),var(--dy)) scale(.4);}}
+  /* index cards grid */
+  .vs-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  @media(max-width:620px){.vs-grid{grid-template-columns:repeat(2,1fr);}}
+  .vs-card{border:1px solid #e6e1db;border-top:2px solid __ACCENT__;
+    border-radius:7px;background:#fff;padding:9px 10px 8px;opacity:0;
+    transform:translateY(12px);transition:.5s;}
+  .in .vs-card{opacity:1;transform:none;}
+  .vs-card.pulse{box-shadow:0 0 0 3px __ACCENT__22;}
+  .vs-ch{display:flex;justify-content:space-between;align-items:baseline;
+    gap:6px;margin-bottom:6px;}
+  .vs-ci{font-size:.72rem;font-weight:600;color:#2b2622;line-height:1.2;}
+  .vs-cc{font-family:monospace;font-size:.6rem;color:__ACCENT__;
+    white-space:nowrap;}
+  .vs-graph{width:100%;height:66px;display:block;}
+  .vs-graph line{stroke:#d9d2ca;stroke-width:1;stroke-dasharray:60;
+    stroke-dashoffset:60;transition:stroke-dashoffset .6s;}
+  .in .vs-graph line{stroke-dashoffset:0;}
+  .vs-graph circle{fill:__ACCENT__;opacity:0;transform:scale(0);
+    transform-origin:center;transition:.4s;}
+  .in .vs-graph circle{opacity:1;transform:scale(1);}
+  .vs-cf{font-size:.58rem;color:#a49d95;letter-spacing:.06em;margin-top:4px;
+    text-align:center;}
 
-  /* retrieval */
-  .retr{flex-direction:column;align-items:stretch;gap:14px;max-width:520px;margin:26px auto 0;}
-  .q{background:#fff;border:1px solid #e4dfda;border-radius:8px;padding:12px 14px;font-size:.9rem;
-     display:flex;align-items:center;gap:10px;}
-  .qv{display:inline-flex;gap:2px;}.qv .cell{width:6px;height:14px;}
-  .matches{display:flex;flex-direction:column;gap:8px;}
-  .m{border:1px solid #e4dfda;border-left:3px solid __ACCENT__;border-radius:6px;padding:9px 12px;
-     background:#fff;font-size:.82rem;display:flex;justify-content:space-between;
-     opacity:0;transform:translateX(-10px);transition:.5s;}
-  .in .m{opacity:1;transform:none;}
-  .m .sc{font-family:monospace;color:__ACCENT__;font-size:.78rem;}
-  .answer{background:__ACCENT__0f;border:1px dashed __ACCENT__;border-radius:8px;padding:12px 14px;
-     font-size:.86rem;color:#3d3a36;opacity:0;transition:.6s .3s;}
-  .in .answer{opacity:1;}
+  /* search chapter (reuses .vs-grid / .vs-card) */
+  .se-query{max-width:640px;margin:2px auto 16px;background:#fff;
+    border:1px solid #e4dfda;border-radius:8px;padding:11px 14px;font-size:.9rem;
+    display:flex;align-items:center;gap:10px;justify-content:center;
+    opacity:0;transform:translateY(-8px);transition:.5s;}
+  .in .se-query{opacity:1;transform:none;}
+  .se-qvec{display:inline-flex;gap:2px;}
+  .se-qvec .cell{width:6px;height:14px;border-radius:1px;}
+  #seGrid{max-width:820px;margin:0 auto;}
+  /* routed / dimmed index states */
+  .vs-card.dim{opacity:.32;filter:grayscale(.7);transition:opacity .5s,filter .5s;}
+  .vs-card.active{box-shadow:0 0 0 2px __ACCENT__;border-top-color:__ACCENT__;}
+  .vs-card .vs-badge{display:none;font-size:.55rem;font-weight:700;color:#fff;
+    background:__ACCENT__;border-radius:3px;padding:1px 5px;margin-left:6px;
+    letter-spacing:.04em;}
+  .vs-card.active .vs-badge{display:inline-block;}
+  /* HNSW walk : entry → visited → hit → neighbours */
+  .vs-graph circle.entry{fill:#fff;stroke:#8a6d3b;stroke-width:2.5;r:5;}
+  .vs-graph circle.visit{fill:#d95f16;r:4;}
+  .vs-graph circle.hit{fill:__ACCENT__;stroke:__ACCENT__;stroke-width:7;
+    stroke-opacity:.3;r:5;}
+  .vs-graph circle.neighbor{fill:#8a6d3b;r:4.5;stroke:#8a6d3b;stroke-width:5;
+    stroke-opacity:.25;}
+  .vs-graph line.walk{stroke:__ACCENT__;stroke-width:2;stroke-dashoffset:0;
+    opacity:0;transition:opacity .3s;}
+  .vs-graph line.walk.on{opacity:1;}
+  .vs-graph line.nbr{stroke:#8a6d3b;stroke-width:1.6;stroke-dasharray:3 2;
+    stroke-dashoffset:0;opacity:0;transition:opacity .3s;}
+  .vs-graph line.nbr.on{opacity:.9;}
+  /* search stepper */
+  .se-steps{list-style:none;display:flex;gap:8px;max-width:820px;
+    margin:0 auto 14px;padding:0;flex-wrap:wrap;}
+  .se-steps li{flex:1 1 150px;min-width:140px;border:1px solid #eae5df;
+    border-radius:7px;padding:7px 10px;background:#faf8f6;opacity:.4;
+    transition:.4s;display:flex;flex-direction:column;gap:2px;position:relative;
+    counter-increment:se;}
+  .se-steps li::before{content:counter(se);position:absolute;top:-8px;left:9px;
+    width:17px;height:17px;border-radius:50%;background:#cfc8c0;color:#fff;
+    font-size:.6rem;font-weight:700;display:flex;align-items:center;
+    justify-content:center;transition:.4s;}
+  .se-steps{counter-reset:se;}
+  .se-steps li.on{opacity:1;border-color:__ACCENT__;background:#fff;}
+  .se-steps li.on::before{background:__ACCENT__;}
+  .se-steps li b{font-size:.72rem;color:#2b2622;}
+  .se-steps li span{font-size:.64rem;color:#7a746d;line-height:1.3;}
+  .se-results{max-width:640px;margin:18px auto 0;display:flex;
+    flex-direction:column;gap:8px;}
+  .se-r{border:1px solid #e4dfda;border-left:3px solid __ACCENT__;
+    border-radius:6px;padding:8px 12px;background:#fff;font-size:.82rem;
+    display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+    opacity:0;transform:translateY(8px);transition:.45s;}
+  .se-r.on{opacity:1;transform:none;}
+  .se-r .se-rsrc{color:#8f8b86;font-size:.66rem;}
+  .se-r .sc{font-family:monospace;color:__ACCENT__;font-size:.76rem;}
+
+  /* generation chapter */
+  .gen{max-width:640px;margin:6px auto 0;display:flex;flex-direction:column;gap:6px;}
+  .gen-lbl{display:flex;align-items:center;gap:8px;font-size:.8rem;font-weight:600;
+    color:#2b2622;margin-top:8px;}
+  .gen-lbl em{font-style:normal;font-weight:400;font-size:.7rem;color:#8f8b86;}
+  .gen-n{flex:0 0 20px;height:20px;border-radius:50%;background:__ACCENT__;color:#fff;
+    font-size:.68rem;font-weight:700;display:flex;align-items:center;justify-content:center;}
+  .gen-chunks{display:flex;flex-direction:column;gap:7px;}
+  .gc{border:1px solid #e4dfda;border-left:3px solid #d9d2ca;border-radius:6px;
+    padding:8px 11px;background:#fff;font-size:.8rem;position:relative;
+    transition:transform .55s cubic-bezier(.4,0,.2,1),border-color .4s,box-shadow .4s;}
+  .gc.top{border-left-color:__ACCENT__;box-shadow:0 2px 10px -6px __ACCENT__;}
+  .gc-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+    margin-bottom:3px;}
+  .gc-lbl{font-weight:600;color:#2b2622;font-size:.74rem;}
+  .gc-lbl .rk{display:inline-block;background:__ACCENT__;color:#fff;font-size:.56rem;
+    font-weight:700;border-radius:3px;padding:0 5px;margin-right:6px;opacity:0;
+    transition:.3s;}
+  .gc.reranked .gc-lbl .rk{opacity:1;}
+  .gc-sc{font-family:monospace;font-size:.68rem;color:#a49d95;white-space:nowrap;}
+  .gc-sc b{color:__ACCENT__;}
+  .gc-tx{color:#55504b;line-height:1.4;}
+  .gc.copy{animation:gcCopy .5s ease;}
+  @keyframes gcCopy{0%{background:#fff;}40%{background:__ACCENT__1c;}100%{background:#fff;}}
+  .gen-flow{text-align:center;font-size:.68rem;color:#b0aaa3;letter-spacing:.12em;
+    padding:6px 0;opacity:0;transition:.5s;}
+  .gen-flow.on{opacity:1;}
+  .paste-badge{font-size:.6rem;font-weight:700;color:#fff;background:#8a6d3b;
+    border-radius:4px;padding:2px 7px;letter-spacing:.04em;opacity:0;transform:scale(.8);
+    transition:.35s;}
+  .paste-badge.on{opacity:1;transform:scale(1);}
+  .paste-badge.flash{animation:pasteFlash .5s ease;}
+  @keyframes pasteFlash{50%{background:__ACCENT__;transform:scale(1.12);}}
+  .prompt-card{background:#1f1c19;border-radius:9px;padding:12px 13px;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.72rem;
+    color:#e8e2da;display:flex;flex-direction:column;gap:9px;
+    opacity:0;transform:translateY(10px);transition:.5s;}
+  .prompt-card.on{opacity:1;transform:none;}
+  .pc-line{display:flex;gap:9px;align-items:flex-start;line-height:1.45;}
+  .pc-tag{flex:0 0 62px;font-size:.56rem;font-weight:700;letter-spacing:.08em;
+    color:#9c948a;padding-top:2px;}
+  .pc-sys span:last-child{color:#b8b0a6;}
+  .pc-q span:last-child{color:#ffd9b0;}
+  .pc-ctx-body{display:flex;flex-direction:column;gap:5px;flex:1;}
+  .pc-chunk{background:#2b2723;border-left:2px solid __ACCENT__;border-radius:4px;
+    padding:4px 8px;color:#e0d8ce;opacity:0;transform:translateX(-8px);
+    transition:.4s;}
+  .pc-chunk.on{opacity:1;transform:none;}
+  .pc-chunk .src{color:#9c948a;font-size:.6rem;}
+  .pc-empty{color:#6a635b;font-style:italic;}
+  .answer{background:__ACCENT__0f;border:1px dashed __ACCENT__;border-radius:8px;
+    padding:12px 14px;font-size:.86rem;color:#3d3a36;line-height:1.5;
+    opacity:0;transform:translateY(8px);transition:.5s;}
+  .answer.on{opacity:1;transform:none;}
+  .answer .cite{color:__ACCENT__;font-weight:600;}
 </style>
 
 <script>
 (function(){
   var DOC="__DOCSRC__";
+  var DOCNAME=__DOCNAME__;   // JSON-encoded — safe with apostrophes / accents
   var root=document.getElementById('rag-story');
 
   // ── fullscreen ──────────────────────────────────────────────────────────
@@ -582,7 +829,7 @@ _STORY = r"""
 
       // metadata BELOW the slice (readable, never clipped)
       var m=document.createElement('div');m.className='meta';
-      var chips='<div class="chip">chunk '+(i+1)+'</div><div class="chip">__DOCNAME__</div>';
+      var chips='<div class="chip">chunk '+(i+1)+'</div><div class="chip">'+DOCNAME+'</div>';
       META[i][0].forEach(function(x){chips+='<div class="chip">'+x+'</div>';});
       META[i][1].forEach(function(x){chips+='<div class="chip">'+x+'</div>';});
       META[i][2].forEach(function(x){chips+='<div class="chip tag">'+x+'</div>';});
@@ -744,16 +991,292 @@ _STORY = r"""
     badge.textContent='(modèle d\'embedding indisponible — démo hors-ligne)';
   }
 
-  var db=document.getElementById('dbRows');
-  for(var i=0;i<7;i++){var r=document.createElement('div');r.className='db-row';
-    r.style.transitionDelay=(i*90)+'ms';db.appendChild(r);}
+  // ── Vector store : index cards + mini HNSW graph + routing ──────────────
+  var INDEXES=__INDEXES__;
+  var vsGrid=document.getElementById('vsGrid');
+  var vsFeed=document.getElementById('vsFeed');
+  var vsCards=[];
 
-  var qv=document.getElementById('qv');
-  if(qv&&EMB){qv.appendChild(heatEl(EMB.query.heat));}
-  var matches=document.getElementById('matches');
-  __MATCHES__.forEach(function(m,i){
-    var d=document.createElement('div');d.className='m';d.style.transitionDelay=(i*160)+'ms';
-    d.innerHTML='<span>'+m[0]+'</span><span class="sc">'+m[1]+'</span>';matches.appendChild(d);});
+  function nodesFor(seed){                 // deterministic pseudo-layout
+    var pts=[],n=6,a=seed*2.3+1;
+    for(var i=0;i<n;i++){
+      a=(a*1.7+0.9)%6.2831853;            // cheap deterministic angle walk
+      var rad=16+((seed*7+i*13)%18);
+      pts.push([60+rad*Math.cos(a+i*1.05),33+rad*Math.sin(a+i*1.05)]);
+    }
+    return pts;
+  }
+  function graphSvg(seed){
+    var p=nodesFor(seed),edges='',dots='';
+    for(var i=0;i<p.length;i++){          // connect each node to its 2 nearest
+      var d=[];
+      for(var j=0;j<p.length;j++) if(j!==i)
+        d.push([Math.hypot(p[i][0]-p[j][0],p[i][1]-p[j][1]),j]);
+      d.sort(function(a,b){return a[0]-b[0];});
+      for(var k=0;k<2;k++){var j=d[k][1];
+        edges+='<line x1="'+p[i][0].toFixed(1)+'" y1="'+p[i][1].toFixed(1)+
+               '" x2="'+p[j][0].toFixed(1)+'" y2="'+p[j][1].toFixed(1)+
+               '" style="transition-delay:'+(i*40)+'ms"/>';}
+    }
+    for(var i=0;i<p.length;i++)
+      dots+='<circle cx="'+p[i][0].toFixed(1)+'" cy="'+p[i][1].toFixed(1)+
+            '" r="'+(i===0?4:3)+'" style="transition-delay:'+(300+i*70)+'ms"/>';
+    return '<svg class="vs-graph" viewBox="0 0 120 66">'+edges+dots+'</svg>';
+  }
+  INDEXES.forEach(function(ix,i){
+    var c=document.createElement('div');c.className='vs-card';
+    c.style.transitionDelay=(i*90)+'ms';
+    c.innerHTML='<div class="vs-ch"><span class="vs-ci">'+ix[0]+
+      '</span><span class="vs-cc">'+ix[1].toLocaleString('fr-FR')+' vec.</span></div>'+
+      graphSvg(i)+'<div class="vs-cf">index HNSW</div>';
+    vsGrid.appendChild(c);vsCards.push(c);
+  });
+
+  // routing animation : a vector flies from the feed to each index card
+  function routeVectors(){
+    if(!vsCards.length) return;
+    var fb=vsFeed.getBoundingClientRect();
+    vsCards.forEach(function(card,i){
+      var t=document.createElement('div');t.className='vs-tok';
+      t.style.left=(8+i*10)+'%';vsFeed.appendChild(t);
+      var cb=card.getBoundingClientRect();
+      t.style.setProperty('--dx',(cb.left+cb.width/2-fb.left-(fb.width*(8+i*10)/100))+'px');
+      t.style.setProperty('--dy',(cb.top-fb.top)+'px');
+      setTimeout(function(){t.classList.add('fly');
+        setTimeout(function(){card.classList.add('pulse');
+          setTimeout(function(){card.classList.remove('pulse');},450);},650);
+        setTimeout(function(){t.remove();},950);
+      },i*220);
+    });
+  }
+  var _vsDone=false;
+  function playVs(){routeVectors();}
+  var replayVs=document.getElementById('replayVs');
+  if(replayVs) replayVs.onclick=playVs;
+
+  // ── Search chapter : query routes to relevant indexes, walks HNSW ────────
+  var QIDX=__QIDX__;                        // index positions the query hits
+  var seGrid=document.getElementById('seGrid');
+  var seCards=[];
+  // k nearest neighbours of a node (same rule as the drawn graph edges)
+  function nearest(p,i,k){
+    var d=[];
+    for(var j=0;j<p.length;j++) if(j!==i)
+      d.push([Math.hypot(p[i][0]-p[j][0],p[i][1]-p[j][1]),j]);
+    d.sort(function(a,b){return a[0]-b[0];});
+    return d.slice(0,k).map(function(x){return x[1];});
+  }
+  // greedy descent : from a fixed entry node, hop to the nearest UNVISITED
+  // node until no neighbour is closer — that terminal node is the "hit".
+  function walkPath(seed){
+    var p=nodesFor(seed),cur=p.length-1,seen={},path=[cur];seen[cur]=1;
+    for(var s=0;s<3;s++){
+      var nb=nearest(p,cur,3),best=-1,bd=1e9;
+      for(var t=0;t<nb.length;t++){var j=nb[t];if(seen[j])continue;
+        var dd=Math.hypot(p[cur][0]-p[j][0],p[cur][1]-p[j][1]);
+        if(dd<bd){bd=dd;best=j;}}
+      if(best<0) break;seen[best]=1;path.push(best);cur=best;
+    }
+    var hit=path[path.length-1];
+    // neighbours of the hit that aren't already on the walked path
+    var nbrs=nearest(p,hit,3).filter(function(j){return path.indexOf(j)<0;}).slice(0,2);
+    return {pts:p,path:path,hit:hit,nbrs:nbrs};
+  }
+  if(seGrid) INDEXES.forEach(function(ix,i){
+    var c=document.createElement('div');c.className='vs-card';
+    c.style.transitionDelay=(i*80)+'ms';
+    c.innerHTML='<div class="vs-ch"><span class="vs-ci">'+ix[0]+
+      '<span class="vs-badge">routé</span></span>'+
+      '<span class="vs-cc">'+ix[1].toLocaleString('fr-FR')+' vec.</span></div>'+
+      graphSvg(i)+'<div class="vs-cf">index HNSW</div>';
+    seGrid.appendChild(c);seCards.push(c);
+  });
+  function mkLine(svg,a,b,cls){
+    var ln=document.createElementNS('http://www.w3.org/2000/svg','line');
+    ln.setAttribute('x1',a[0].toFixed(1));ln.setAttribute('y1',a[1].toFixed(1));
+    ln.setAttribute('x2',b[0].toFixed(1));ln.setAttribute('y2',b[1].toFixed(1));
+    ln.setAttribute('class',cls);svg.appendChild(ln);return ln;
+  }
+  // pre-draw hidden walk + neighbour segments inside a card's svg
+  function armWalk(card,seed){
+    var svg=card.querySelector('svg'),w=walkPath(seed),p=w.pts;
+    var seg=[];
+    for(var k=0;k<w.path.length-1;k++)
+      seg.push(mkLine(svg,p[w.path[k]],p[w.path[k+1]],'walk'));
+    var nseg=w.nbrs.map(function(nb){return mkLine(svg,p[w.hit],p[nb],'nbr');});
+    return {svg:svg,path:w.path,hit:w.hit,nbrs:w.nbrs,seg:seg,nseg:nseg};
+  }
+  var seSteps=document.querySelectorAll('#seSteps li');
+  function step(n){seSteps.forEach(function(li){
+    li.classList.toggle('on',+li.getAttribute('data-s')<=n);});}
+
+  function playSearch(){
+    if(!seCards.length) return;
+    var qvec=document.getElementById('seQvec');
+    var seRes=document.getElementById('seResults');
+    if(seRes) seRes.innerHTML='';
+    seSteps.forEach(function(li){li.classList.remove('on');});
+    seCards.forEach(function(c){c.className='vs-card';
+      c.querySelectorAll('circle').forEach(function(ci){
+        ci.classList.remove('entry','visit','hit','neighbor');});
+      c.querySelectorAll('line.walk,line.nbr').forEach(function(l){l.remove();});});
+    // 1) query becomes a vector
+    if(qvec){qvec.innerHTML='';if(EMB) qvec.appendChild(heatEl(EMB.query.heat));}
+    // 2) route : dim irrelevant indexes, activate the hit ones
+    setTimeout(function(){
+      seCards.forEach(function(c,i){
+        c.classList.add(QIDX.indexOf(i)<0?'dim':'active');});
+      // 3) inside each active index : entry → descent → hit → neighbours
+      QIDX.forEach(function(idx,order){
+        var card=seCards[idx];if(!card) return;
+        var w=armWalk(card,idx),circles=card.querySelectorAll('circle');
+        var base=order*260;
+        // entry point
+        setTimeout(function(){circles[w.path[0]].classList.add('entry');
+          if(order===0) step(0);},base);
+        // greedy descent, one hop at a time
+        for(var s=1;s<w.path.length;s++)(function(s){
+          setTimeout(function(){
+            if(w.seg[s-1]) w.seg[s-1].classList.add('on');
+            var isHit=s===w.path.length-1;
+            circles[w.path[s]].classList.remove('entry');
+            circles[w.path[s]].classList.add(isHit?'hit':'visit');
+            if(order===0) step(isHit?2:1);
+          },base+300+s*360);
+        })(s);
+        // neighbours of the hit become the candidate results
+        setTimeout(function(){
+          w.nseg.forEach(function(l){l.classList.add('on');});
+          w.nbrs.forEach(function(nb){circles[nb].classList.add('neighbor');});
+          if(order===0) step(3);
+        },base+300+w.path.length*360+250);
+      });
+      // 4) results rise up once the walks are done
+      setTimeout(showSeResults,QIDX.length*260+2000);
+    },700);
+  }
+  function showSeResults(){
+    var seRes=document.getElementById('seResults');if(!seRes) return;
+    seRes.innerHTML='';
+    var top=__MATCHES__.slice(0,3);
+    top.forEach(function(m,i){
+      var hitName=INDEXES[QIDX[i%QIDX.length]]?INDEXES[QIDX[i%QIDX.length]][0]:'';
+      var tag=i===0?'vecteur le plus proche':'voisin immédiat';
+      var r=document.createElement('div');r.className='se-r';
+      r.innerHTML='<span>'+m[0]+'<div class="se-rsrc">'+tag+' · index : '+hitName+
+        '</div></span><span class="sc">'+m[1]+'</span>';
+      seRes.appendChild(r);
+      setTimeout(function(){r.classList.add('on');},120+i*180);
+    });
+  }
+  var _seDone=false;
+  var replaySe=document.getElementById('replaySe');
+  if(replaySe) replaySe.onclick=playSearch;
+
+  // ── Generation chapter : retrieve → rerank → paste → send ────────────────
+  var GEN=__GEN__;
+  var genChunks=document.getElementById('genChunks');
+  var gcEls=[];
+  function short(t,n){return t.length>n?t.slice(0,n).replace(/\s+\S*$/,'')+'…':t;}
+  if(genChunks&&GEN){
+    // render in retrieval order first
+    GEN.retrOrder.forEach(function(ci){
+      var c=GEN.chunks[ci];
+      var el=document.createElement('div');el.className='gc';el.dataset.ci=ci;
+      el.innerHTML='<div class="gc-h"><span class="gc-lbl">'+
+        '<span class="rk"></span>'+c.label+'</span>'+
+        '<span class="gc-sc" data-sc>récup <b>'+c.retr.toFixed(2)+'</b></span></div>'+
+        '<div class="gc-tx">'+short(c.text,110)+'</div>';
+      genChunks.appendChild(el);gcEls.push(el);
+    });
+  }
+  function pcChunkHtml(c){
+    return '<div class="pc-chunk"><span class="src">['+c.label+'] </span>'+
+      short(c.text,150)+'</div>';
+  }
+  function playGen(){
+    if(!genChunks||!GEN) return;
+    var flowP=document.getElementById('flowPrompt');
+    var flowS=document.getElementById('flowSend');
+    var badge=document.getElementById('pasteBadge');
+    var card=document.getElementById('promptCard');
+    var phase=document.getElementById('genPhase');
+    var ans=document.getElementById('genAnswer');
+    // reset
+    [flowP,flowS,badge,card,ans].forEach(function(x){if(x)x.classList.remove('on');});
+    if(ans)ans.innerHTML='';
+    document.getElementById('pcSys').textContent=GEN.sys;
+    document.getElementById('pcQ').textContent='« '+GEN.query+' »';
+    document.getElementById('pcCtx').innerHTML=
+      '<span class="pc-empty">— en attente des chunks —</span>';
+    gcEls.forEach(function(el){el.className='gc';
+      el.querySelector('[data-sc]').innerHTML='récup <b>'+
+        GEN.chunks[el.dataset.ci].retr.toFixed(2)+'</b>';});
+    if(phase)phase.textContent='— tri par similarité';
+
+    // 1) RERANK : FLIP reorder gcEls into rerankOrder, add rerank scores
+    setTimeout(function(){
+      if(phase)phase.textContent='— reclassé par le cross-encoder (rerank)';
+      var first={};gcEls.forEach(function(el){first[el.dataset.ci]=el.getBoundingClientRect().top;});
+      // reorder DOM
+      GEN.rerankOrder.forEach(function(ci){
+        var el=gcEls.find(function(e){return +e.dataset.ci===ci;});
+        genChunks.appendChild(el);
+      });
+      // FLIP
+      gcEls.forEach(function(el){
+        var last=el.getBoundingClientRect().top,dy=first[el.dataset.ci]-last;
+        el.style.transform='translateY('+dy+'px)';el.style.transition='none';
+      });
+      requestAnimationFrame(function(){gcEls.forEach(function(el){
+        el.style.transition='';el.style.transform='';});});
+      // update scores + top highlight
+      gcEls.forEach(function(el){var c=GEN.chunks[el.dataset.ci];
+        el.classList.add('reranked');
+        el.querySelector('.rk').textContent='#'+(c.rank+1);
+        el.querySelector('[data-sc]').innerHTML='récup '+c.retr.toFixed(2)+
+          ' → rerank <b>'+c.rerank.toFixed(2)+'</b>';
+        if(c.rank===0)el.classList.add('top');});
+    },800);
+
+    // 2) PASTE : copy each top chunk's text into the prompt CONTEXT
+    setTimeout(function(){
+      if(flowP)flowP.classList.add('on');
+      if(card)card.classList.add('on');
+      if(badge)badge.classList.add('on');
+      document.getElementById('pcCtx').innerHTML='';
+      var ord=GEN.rerankOrder.slice(0,3);
+      ord.forEach(function(ci,k){
+        var c=GEN.chunks[ci];
+        setTimeout(function(){
+          // flash the source chunk (Ctrl+C) then insert into prompt (Ctrl+V)
+          var srcEl=gcEls.find(function(e){return +e.dataset.ci===ci;});
+          if(srcEl)srcEl.classList.add('copy');
+          if(badge){badge.classList.add('flash');
+            setTimeout(function(){badge.classList.remove('flash');},500);}
+          var d=document.createElement('div');d.innerHTML=pcChunkHtml(c);
+          var node=d.firstChild;document.getElementById('pcCtx').appendChild(node);
+          requestAnimationFrame(function(){node.classList.add('on');});
+          if(srcEl)setTimeout(function(){srcEl.classList.remove('copy');},500);
+        },k*650);
+      });
+    },1900);
+
+    // 3) SEND → answer
+    setTimeout(function(){
+      if(flowS)flowS.classList.add('on');
+    },1900+3*650+300);
+    setTimeout(function(){
+      if(!ans)return;
+      var best=GEN.chunks[GEN.rerankOrder[0]];
+      ans.innerHTML='D\'après le contexte fourni : '+short(best.text,150)+
+        ' <span class="cite">['+best.label+']</span>';
+      ans.classList.add('on');
+    },1900+3*650+900);
+  }
+  var _genDone=false;
+  var replayGen=document.getElementById('replayGen');
+  if(replayGen) replayGen.onclick=playGen;
 
   // ── scroll reveal ───────────────────────────────────────────────────────
   var chaps=root.querySelectorAll('.chap');var dots=root.querySelectorAll('.rail span');
@@ -762,6 +1285,9 @@ _STORY = r"""
       var i=+e.target.getAttribute('data-i');
       dots.forEach(function(d){d.classList.toggle('on',+d.getAttribute('data-c')===i);});
       if(i===1)setTimeout(playSlice,250);
+      if(i===3&&!_vsDone){_vsDone=true;setTimeout(playVs,500);}
+      if(i===4&&!_seDone){_seDone=true;setTimeout(playSearch,500);}
+      if(i===5&&!_genDone){_genDone=true;setTimeout(playGen,400);}
     }});},{threshold:0.4});
   chaps.forEach(function(c){io.observe(c);});
 })();
@@ -773,7 +1299,10 @@ st_html(
           .replace("__QUERY__", _DEMO_QUERY)
           .replace("__TAGS__", _tags_json)
           .replace("__MATCHES__", _matches_json)
-          .replace("__DOCNAME__", _doc_name)
+          .replace("__INDEXES__", _indexes_json)
+          .replace("__QIDX__", _qidx_json)
+          .replace("__GEN__", _gen_json)
+          .replace("__DOCNAME__", _doc_name_json)
           .replace("__DOCSRC__", doc_src)
           .replace("__EMB__", _emb_json)
           .replace("__NAIVE__", _naive_json),

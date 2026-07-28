@@ -26,17 +26,29 @@ _CONFIG_PATH = _PROJECT_ROOT / ".streamlit" / "config.toml"
 def _theme_toml() -> str:
     t = ACTIVE.theme
     secondary = t.secondary_background or t.accent_light
-    return (
-        "# GENERATED from shared/brand.py — do not edit by hand.\n"
-        f"# Brand profile: {ACTIVE.name}\n"
-        "[theme]\n"
-        f'base = "{t.base}"\n'
-        f'primaryColor = "{t.accent}"\n'
-        f'backgroundColor = "{t.background}"\n'
-        f'secondaryBackgroundColor = "{secondary}"\n'
-        f'textColor = "{t.text}"\n'
-        f'font = "{t.font}"\n'
-    )
+
+    lines = [
+        "# GENERATED from shared/brand.py — do not edit by hand.",
+        f"# Brand profile: {ACTIVE.name}",
+        "[theme]",
+        f'base = "{t.base}"',
+        f'primaryColor = "{t.accent}"',
+        f'backgroundColor = "{t.background}"',
+        f'secondaryBackgroundColor = "{secondary}"',
+        f'textColor = "{t.text}"',
+        # A profile that names real faces wins over the generic keyword.
+        # TOML *literal* strings (single quotes) — a font stack contains double
+        # quotes around multi-word family names, which would break a basic
+        # double-quoted string.
+        f"font = '{t.font_body or t.font}'",
+    ]
+    if t.font_heading:
+        lines.append(f"headingFont = '{t.font_heading}'")
+    if t.font_code:
+        lines.append(f"codeFont = '{t.font_code}'")
+    if t.base_font_size:
+        lines.append(f"baseFontSize = {t.base_font_size}")
+    return "\n".join(lines) + "\n"
 
 
 def main() -> int:

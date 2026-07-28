@@ -38,24 +38,22 @@ def render_assistant_message(
     from components.answer_renderer import render_answer
 
     with st.chat_message("assistant"):
-        if tool_events:
-            from components.tool_call_expander import render_tool_events
-            render_tool_events(tool_events)
+        # A photo assessment is laid out as an atelier intake sheet above the
+        # prose answer: it is the evidence the answer rests on, so it belongs
+        # in front of it rather than folded away with the machinery.
+        from components.sav_sheet import extract_sav_responses, render_sav_sheet
+        for _sheet in extract_sav_responses(tool_events):
+            render_sav_sheet(_sheet)
 
         if text:
             render_answer(text, sources or [])
         elif not tool_events:
-            st.caption("_(no response)_")
+            st.caption("_(pas de réponse)_")
             return
 
-        if sources:
-            from components.source_card import render_sources
-            with st.expander(f"Sources ({len(sources)})", expanded=False):
-                render_sources(sources, pipeline="hybrid")
-        if chunks:
-            from components.source_card import render_chunks
-            with st.expander(f"Retrieved chunks ({len(chunks)})", expanded=False):
-                render_chunks(chunks)
+        # Sources, passages and the route taken share one fold-out.
+        from components.detail_panel import render_detail_panel
+        render_detail_panel(tool_events, sources, chunks)
 
 
 def render_error_message(message: str) -> None:
@@ -63,8 +61,8 @@ def render_error_message(message: str) -> None:
     with st.chat_message("assistant"):
         if "429" in message or "RESOURCE_EXHAUSTED" in message:
             st.warning(
-                "The service is temporarily overloaded (API quota exceeded). "
-                "Please try again in a few seconds."
+                "Le quota du service est atteint. Renvoyez la question dans "
+                "quelques secondes — votre dossier est conservé."
             )
         else:
-            st.error(f"**Error**: {message}")
+            st.error(f"**Erreur** : {message}")

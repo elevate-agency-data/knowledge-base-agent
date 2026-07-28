@@ -90,79 +90,100 @@ _init()
 with st.sidebar:
     render_sidebar_nav()
     st.divider()
-    st.header("Simple Chat")
-    st.divider()
 
-    # ── New conversation ──────────────────────────────────────────────────────
-    if st.button("New conversation", use_container_width=True, type="primary"):
+    if st.button("Nouvel entretien", use_container_width=True, type="primary"):
         _create_and_switch(rag_on=st.session_state.sc_rag_on)
         st.rerun()
 
-    # ── RAG toggle ────────────────────────────────────────────────────────────
-    rag_on = st.toggle(
-        "RAG activation",
-        value=st.session_state.sc_rag_on,
-    )
+    st.divider()
 
+    # ── Retrieval on/off ──────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="lux-eyebrow" style="margin-bottom:8px;">Recherche</div>',
+        unsafe_allow_html=True,
+    )
+    rag_on = st.toggle("Consulter la base documentaire",
+                       value=st.session_state.sc_rag_on)
     if rag_on != st.session_state.sc_rag_on:
         _create_and_switch(rag_on=rag_on)
         st.rerun()
 
-    # ── Available indexes (info only) ─────────────────────────────────────────
+    st.caption(
+        "Les réponses citent les documents consultés."
+        if rag_on else
+        "Le modèle répond seul, sans consulter la base."
+    )
+
+    # ── Indexes reachable with this role (informational) ──────────────────────
     if rag_on:
-        st.divider()
         try:
             from services.hybrid_service import list_indexes_for_user
             _idx_names = [i["index_name"] for i in list_indexes_for_user(USER_ROLE)]
         except Exception:
             _idx_names = []
 
+        st.divider()
+        st.markdown(
+            '<div class="lux-eyebrow" style="margin-bottom:8px;">'
+            'Index accessibles</div>',
+            unsafe_allow_html=True,
+        )
         if _idx_names:
-            st.markdown(f"**Indexes (role: `{USER_ROLE}`)**")
-            for n in _idx_names:
-                st.caption(f"· {n}")
+            st.markdown(
+                "".join(
+                    f'<div class="lux-row" style="padding:6px 0;">'
+                    f'<span class="lux-row-name" style="font-size:.82rem;">'
+                    f'{n}</span></div>'
+                    for n in _idx_names
+                ),
+                unsafe_allow_html=True,
+            )
             st.caption(
-                "_Indexes detected automatically from your question. "
-                "Only indexes allowed by your role are queried._"
+                f"Choisis d'après votre question, parmi ceux ouverts au rôle "
+                f"« {USER_ROLE.replace('_', ' ')} »."
             )
         else:
-            st.warning("No indexes accessible for your role.")
+            st.warning("Aucun index ouvert à votre rôle.")
 
-    # ── Status badge ──────────────────────────────────────────────────────────
+    # ── Conversations ─────────────────────────────────────────────────────────
     st.divider()
-    if not rag_on:
-        st.info("Gemini chatbot\nWithout RAG enrichment")
-    else:
-        st.success("Hybrid RAG\nIndexes auto-detected")
-
-    # ── Sessions list ─────────────────────────────────────────────────────────
-    st.divider()
-    st.markdown("**Sessions**")
+    st.markdown(
+        '<div class="lux-eyebrow" style="margin-bottom:8px;">Entretiens</div>',
+        unsafe_allow_html=True,
+    )
     sessions_cache = st.session_state.get("sc_sessions_cache", [])
     active_sid     = _active_sid()
 
     if not sessions_cache:
-        st.caption("_No sessions_")
+        st.caption("_Aucun entretien_")
 
     for sess in sessions_cache:
         sid       = sess["id"]
         is_active = sid == active_sid
         n_msg     = sess["msg_count"]
-        label     = f"{'▶ ' if is_active else ''}{sess['name']}"
 
-        col_btn, col_del = st.columns([5, 1])
+        # Same marking as Agent Chat: a stitch in the margin, not a filled slab.
+        mark_c, col_btn, col_del = st.columns([1, 10, 2], gap="small")
+        with mark_c:
+            if is_active:
+                st.markdown(
+                    '<div style="height:34px;width:5px;margin-top:4px;'
+                    'background-image:repeating-linear-gradient(148deg,'
+                    'var(--lux-accent) 0 2px,transparent 2px 5px);'
+                    'background-size:5px 100%;background-repeat:repeat-y;"></div>',
+                    unsafe_allow_html=True,
+                )
         with col_btn:
             if st.button(
-                label,
+                sess["name"] if n_msg else "Nouvel entretien",
                 key=f"sc_sw_{sid}",
                 use_container_width=True,
-                type="primary" if is_active else "secondary",
                 help=f"{n_msg} message{'s' if n_msg != 1 else ''}",
             ):
                 _load_session_into_state(sess)
                 st.rerun()
         with col_del:
-            if st.button("✕", key=f"sc_del_{sid}", help="Delete"):
+            if st.button("✕", key=f"sc_del_{sid}", help="Supprimer"):
                 from services.chat_store import sc_delete_session
                 sc_delete_session(sid)
                 if sid == active_sid:
@@ -178,20 +199,35 @@ with st.sidebar:
 
 rag_on = st.session_state.sc_rag_on
 
-st.title("Chat")
+from components.lux_style import poincon
 
-if not rag_on:
-    st.caption("Model response without document retrieval.")
-else:
-    st.caption(
-        "Documents retrieved from Hybrid indexes — "
-        "indexes automatically selected based on your question."
-    )
+_sess = next((s for s in st.session_state.get("sc_sessions_cache", [])
+              if s["id"] == _active_sid()), None)
+_n_msg = _sess["msg_count"] if _sess else 0
+_title = (_sess["name"] if _sess and _n_msg else "Nouvel entretien")
+
+_marks = [poincon(f"{_n_msg} message{'s' if _n_msg != 1 else ''}"),
+          poincon(USER_ROLE.replace("_", " "))]
+_marks.append(poincon("base consultée", "accent") if rag_on
+              else poincon("sans la base"))
+
+st.markdown(
+    f"""
+    <div class="lux-eyebrow">Entretien</div>
+    <div class="lux-stitch"></div>
+    <div class="lux-h2" style="margin-bottom:12px;">{_title}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;">{''.join(_marks)}</div>
+    """,
+    unsafe_allow_html=True,
+)
+
+_intro_slot = st.empty()
+st.markdown('<div class="lux-space-sm"></div>', unsafe_allow_html=True)
 
 # ── Chat history ──────────────────────────────────────────────────────────────
 
 from components.chat_message import render_user_message, render_error_message
-from components.source_card  import render_sources, render_chunks
+from components.detail_panel import render_detail_panel
 from components.answer_renderer import render_answer
 
 for msg in st.session_state.sc_messages:
@@ -203,44 +239,44 @@ for msg in st.session_state.sc_messages:
             sources  = msg.get("sources", [])
             chunks   = msg.get("chunks", [])
             elapsed  = msg.get("elapsed_s")
-            timings  = msg.get("timings", {})
             render_answer(msg["text"], sources)
-            if sources:
-                with st.expander(f"Sources ({len(sources)})", expanded=False):
-                    render_sources(sources, pipeline="hybrid")
-            if chunks:
-                with st.expander(f"Retrieved chunks ({len(chunks)})", expanded=False):
-                    render_chunks(chunks)
-            timing_parts: list[str] = []
-            if timings:
-                for k in ("resolve_and_rewrite", "rewrite_query", "embedding",
-                          "threads", "search", "generation"):
-                    if k in timings:
-                        label = k.replace("_", " ").replace("and", "+")
-                        timing_parts.append(f"{label} {timings[k]}s")
+            # Same single fold-out as Agent Chat — no tool events here, so it
+            # holds the documents consulted and the passages retained.
+            render_detail_panel(None, sources, chunks)
             if elapsed is not None:
-                caption = f"{elapsed}s"
-                if timing_parts:
-                    caption += f" · {' · '.join(timing_parts)}"
-                st.caption(caption)
+                st.markdown(
+                    f'<div style="margin-top:6px;">{poincon(f"{elapsed}s")}</div>',
+                    unsafe_allow_html=True,
+                )
 
     elif msg["role"] == "error":
         render_error_message(msg["text"])
 
 
+# ── Empty conversation: an invitation ─────────────────────────────────────────
+
+if not st.session_state.sc_messages:
+    _intro_slot.markdown(
+        f"""
+        <p class="lux-lead" style="font-size:.92rem;margin:14px 0 6px 0;">
+          {"Posez votre question : la base est consultée et la réponse cite ses "
+           "documents." if rag_on else
+           "Le modèle répond de mémoire, sans consulter la base. Activez la "
+           "recherche à gauche pour des réponses sourcées."}
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
 # ── Input & routing ───────────────────────────────────────────────────────────
 
-_placeholder = (
-    "Ask your question..."
-    if not rag_on
-    else "Ask a question about your documents..."
-)
-
-user_input = st.chat_input(_placeholder)
+user_input = st.chat_input("Posez votre question…")
 
 if user_input:
     from services.chat_store import sc_append_message
     from rag_agent.runtime_context import set_user_role
+
+    _intro_slot.empty()   # the guidance has served its purpose
 
     # The dense pipeline reads runtime_context.user_role on the calling
     # thread to filter the candidate index list. Without this, the default
@@ -400,22 +436,16 @@ if user_input:
 
                     with st.chat_message("assistant"):
                         render_answer(answer, sources)
-                        if sources:
-                            with st.expander(f"Sources ({len(sources)})", expanded=False):
-                                render_sources(sources, pipeline="hybrid")
-                        if chunks:
-                            with st.expander(f"Retrieved chunks ({len(chunks)})", expanded=False):
-                                render_chunks(chunks)
-                        timing_parts = []
-                        for k in ("resolve+rewrite", "embedding", "threads", "generation"):
-                            if k in timings:
-                                timing_parts.append(f"{k} {timings[k]}s")
-                        caption = f"{elapsed}s · {index_label}"
-                        if timing_parts:
-                            caption += f" · {' · '.join(timing_parts)}"
+                        # Same single fold-out as the history replay above.
+                        render_detail_panel(None, sources, chunks)
+                        _m = [poincon(f"{elapsed}s"), poincon(index_label)]
+                        st.markdown(
+                            f'<div style="display:flex;gap:5px;flex-wrap:wrap;'
+                            f'margin-top:6px;">{"".join(_m)}</div>',
+                            unsafe_allow_html=True,
+                        )
                         if rewritten and rewritten != user_input:
-                            caption += f"\nretrieval query: _{rewritten}_"
-                        st.caption(caption)
+                            st.caption(f"Requête de recherche : _{rewritten}_")
 
                     msg = {
                         "role":      "assistant",

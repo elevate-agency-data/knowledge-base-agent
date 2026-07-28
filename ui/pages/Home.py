@@ -27,59 +27,13 @@ require_auth()
 with st.sidebar:
     render_sidebar_user()
 
-_ACCENT = ACTIVE.theme.accent
-
 # ── Editorial styling ─────────────────────────────────────────────────────────
+# Tokens and primitives live in components/lux_style.py so every page shares one
+# visual language instead of re-declaring its own.
 
-st.markdown(
-    f"""
-    <style>
-      .lux-eyebrow {{
-        font-size: .70rem; letter-spacing: .24em; text-transform: uppercase;
-        color: #8f8b86; margin: 0 0 10px 0;
-      }}
-      .lux-h2 {{
-        font-size: 1.85rem; font-weight: 400; line-height: 1.3;
-        margin: 0 0 16px 0; letter-spacing: .01em;
-      }}
-      .lux-lead {{
-        font-size: 1.02rem; line-height: 1.85; color: #55504b; max-width: 68ch;
-      }}
-      .lux-rule {{
-        width: 44px; height: 2px; background: {_ACCENT}; margin: 0 0 26px 0;
-      }}
-      .lux-card {{
-        border: 1px solid #e9e5e1; padding: 28px 24px; height: 100%;
-      }}
-      .lux-card-title {{
-        font-size: .76rem; letter-spacing: .18em; text-transform: uppercase;
-        margin: 0 0 12px 0;
-      }}
-      .lux-card-rule {{
-        width: 26px; height: 2px; background: {_ACCENT}; margin: 0 0 16px 0;
-      }}
-      .lux-card-body {{
-        font-size: .90rem; line-height: 1.75; color: #6a655f; margin: 0;
-      }}
-      .lux-metric-value {{
-        font-size: 2.7rem; font-weight: 400; line-height: 1; letter-spacing: .01em;
-      }}
-      .lux-metric-label {{
-        font-size: .68rem; letter-spacing: .20em; text-transform: uppercase;
-        color: #8f8b86; margin-top: 10px;
-      }}
-      .lux-row {{
-        display: flex; justify-content: space-between; align-items: baseline;
-        border-bottom: 1px solid #f0edea; padding: 11px 0;
-      }}
-      .lux-row-name {{ font-size: .92rem; letter-spacing: .02em; }}
-      .lux-row-meta {{ font-size: .76rem; color: #9a958f; letter-spacing: .06em; }}
-      .lux-space {{ height: 60px; }}
-      .lux-space-sm {{ height: 30px; }}
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+from components.lux_style import inject_lux_style
+
+inject_lux_style()
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
@@ -93,7 +47,7 @@ _HEADLINE = ACTIVE.headline or ACTIVE.subtitle
 
 st.markdown(
     f"""
-    <div class="lux-eyebrow">Overview</div>
+    <div class="lux-eyebrow">En quelques mots</div>
     <div class="lux-rule"></div>
     <div class="lux-h2">{_HEADLINE}</div>
     <p class="lux-lead">{APP_DESCRIPTION}</p>
@@ -103,50 +57,74 @@ st.markdown(
 
 st.markdown('<div class="lux-space"></div>', unsafe_allow_html=True)
 
-# ── Services ──────────────────────────────────────────────────────────────────
+# ── What you can do here ──────────────────────────────────────────────────────
+# One card per page of the app, written for the person doing the job rather
+# than for the person who built it: what it lets you do, not how it works.
 
 st.markdown(
-    '<div class="lux-eyebrow">Services</div><div class="lux-rule"></div>',
+    '<div class="lux-eyebrow">Ce que vous pouvez faire</div>'
+    '<div class="lux-rule"></div>',
     unsafe_allow_html=True,
 )
 
 _CARDS = [
     (
-        "Agent chat",
-        "Ask in natural language. The agent selects the relevant domains and "
-        "retrieves a sourced answer from the knowledge base.",
+        "Poser une question",
+        "Décrivez la situation du client. La réponse est cherchée pour vous "
+        "dans les bons documents et arrive avec ses sources, prête à relayer.",
     ),
     (
-        "Simple chat",
-        "A direct exchange without the agent layer. Toggle document retrieval "
-        "on or off to compare answers.",
+        "Montrer une pièce",
+        "Joignez la photo d'un article à votre question. Elle est lue avant la "
+        "recherche : ce que c'est, ce qui est abîmé, ce qui peut être conservé.",
     ),
     (
-        "Knowledge base",
-        "Import documents from Drive, organize them by domain and monitor the "
-        "state of the base.",
+        "Échanger simplement",
+        "Un échange direct, avec ou sans consultation de la base. Utile pour "
+        "comparer une réponse documentée à une réponse de mémoire.",
+    ),
+    (
+        "Comparer les recherches",
+        "Voir, sur une même question, ce que remontent les différentes façons "
+        "de chercher — et pourquoi les combiner donne de meilleures réponses.",
+    ),
+    (
+        "Comprendre le principe",
+        "Une visite guidée, en images, de ce qui se passe entre un document "
+        "déposé et une réponse citée.",
+    ),
+    (
+        "Alimenter la base",
+        "Ajouter des documents depuis le Drive de la Maison, les ranger par "
+        "domaine et suivre ce que contient la base.",
     ),
 ]
 
-for col, (title, body) in zip(st.columns(3, gap="large"), _CARDS):
-    with col:
-        st.markdown(
-            f"""
-            <div class="lux-card">
-              <div class="lux-card-title">{title}</div>
-              <div class="lux-card-rule"></div>
-              <p class="lux-card-body">{body}</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+for row_start in (0, 3):
+    for col, (title, body) in zip(
+        st.columns(3, gap="large"), _CARDS[row_start:row_start + 3]
+    ):
+        with col:
+            st.markdown(
+                f"""
+                <div class="lux-card">
+                  <div class="lux-card-title">{title}</div>
+                  <div class="lux-card-rule"></div>
+                  <p class="lux-card-body">{body}</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    if row_start == 0:
+        st.markdown('<div class="lux-space-sm"></div>', unsafe_allow_html=True)
 
 st.markdown('<div class="lux-space"></div>', unsafe_allow_html=True)
 
 # ── Knowledge base state ──────────────────────────────────────────────────────
 
 st.markdown(
-    '<div class="lux-eyebrow">Knowledge base</div><div class="lux-rule"></div>',
+    '<div class="lux-eyebrow">Ce que contient la base</div>'
+    '<div class="lux-rule"></div>',
     unsafe_allow_html=True,
 )
 
@@ -165,34 +143,70 @@ def _metric(col, value, label) -> None:
     )
 
 
+# Index names are deliberately ASCII (they feed table names and substring
+# matching), but that constraint must not surface as unaccented French on the
+# page. Display-only restoration for the domains this base uses.
+_ACCENTED = {
+    "reparation": "Réparation",
+    "restauration": "Restauration",
+    "entretien": "Entretien",
+    "garantie": "Garantie",
+    "authenticite": "Authenticité",
+    "personnalisation": "Personnalisation",
+    "produits": "Produits",
+    "commandes": "Commandes",
+    "retours": "Retours",
+    "procedures": "Procédures",
+    "pilotage": "Pilotage",
+}
+
+
+def _pretty(name: str) -> str:
+    """Index name → a label a reader recognises ('reparation' → 'Réparation')."""
+    label = (name.split("__", 1)[1] if "__" in name else name).strip().lower()
+    if label in _ACCENTED:
+        return _ACCENTED[label]
+    return label.replace("_", " ").capitalize()
+
+
 try:
     indexes = _get_indexes()
-    domains = sorted({
-        (n.split("__", 1)[0] if "__" in n else n)
-        for n in (i.get("index_name", "") for i in indexes) if n
-    })
+    n_docs = sum(i.get("total_files", 0) for i in indexes)
 
-    col_a, col_b, col_c = st.columns(3)
-    _metric(col_a, len(domains), "Domains")
-    _metric(col_b, len(indexes), "Indexes")
-    _metric(col_c, sum(i.get("total_files", 0) for i in indexes), "Documents")
+    col_a, col_b = st.columns(2)
+    _metric(col_a, len(indexes), "Domaines couverts")
+    _metric(col_b, n_docs or "—", "Documents")
 
     st.markdown('<div class="lux-space-sm"></div>', unsafe_allow_html=True)
 
     if indexes:
         rows = "".join(
             f'<div class="lux-row">'
-            f'<span class="lux-row-name">{idx.get("index_name", "")}</span>'
-            f'<span class="lux-row-meta">{idx.get("total_chunks", "?")} chunks</span>'
+            f'<span class="lux-row-name">{_pretty(idx.get("index_name", ""))}</span>'
+            f'<span class="lux-row-meta">'
+            f'{idx.get("total_files") or "—"} document'
+            f'{"s" if (idx.get("total_files") or 0) > 1 else ""}</span>'
             f'</div>'
             for idx in indexes
         )
         st.markdown(rows, unsafe_allow_html=True)
-    else:
         st.markdown(
-            '<p class="lux-lead">The base holds no documents yet. '
-            'Import from Drive via the Knowledge base page.</p>',
+            '<p class="lux-lead" style="font-size:.88rem;margin-top:22px;">'
+            'Chaque réponse cite les documents dont elle vient : rien n\'est '
+            'inventé, tout se vérifie.</p>',
             unsafe_allow_html=True,
         )
-except Exception as exc:
-    st.warning(f"Knowledge base unavailable: {exc}")
+    else:
+        st.markdown(
+            '<p class="lux-lead">La base ne contient encore aucun document. '
+            'Ajoutez-en depuis la page <b>Knowledge Base</b>.</p>',
+            unsafe_allow_html=True,
+        )
+except Exception:
+    # The store is single-writer: a second running instance makes it look empty.
+    st.markdown(
+        '<p class="lux-lead">L\'état de la base n\'est pas consultable pour le '
+        'moment. Si l\'application tourne déjà dans une autre fenêtre, fermez-la '
+        'puis rechargez cette page.</p>',
+        unsafe_allow_html=True,
+    )

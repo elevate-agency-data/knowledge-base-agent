@@ -49,16 +49,29 @@ def _warmup():
 
 _warmup()
 
+
+@st.cache_resource(show_spinner=False)
+def _prune_uploads_once() -> int:
+    """Purge les visuels SAV déposés (âge puis taille), une fois par démarrage."""
+    try:
+        from vision.uploads import prune_uploads
+        return prune_uploads()
+    except Exception:
+        return 0
+
+
+_prune_uploads_once()
+
 # Toutes les pages enregistrées — sidebar gérée manuellement par chaque page.
 # Login est la page par défaut (URL racine / session expirée).
 pages = [
     st.Page("pages/0_Login.py",          title="Login",          default=True),
     st.Page("pages/Home.py",             title="Home"),
-    st.Page("pages/1_Agent_Chat.py",     title="Agent Chat"),
-    st.Page("pages/2_RAG_Demo.py",       title="RAG Demo"),
     st.Page("pages/How_RAG_Works.py",    title="How RAG Works"),
-    st.Page("pages/5_Simple_Chat.py",    title="Simple Chat"),
+    st.Page("pages/2_RAG_Demo.py",       title="RAG Demo"),
     st.Page("pages/3_Index_Manager.py",  title="Knowledge Base"),
+    st.Page("pages/5_Simple_Chat.py",    title="Simple Chat"),
+    st.Page("pages/1_Agent_Chat.py",     title="Agent Chat"),
     st.Page("pages/6_Admin.py",          title="Administration"),
 ]
 

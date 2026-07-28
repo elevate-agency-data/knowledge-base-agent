@@ -40,8 +40,12 @@ def _engine():
 
 @st.cache_data(ttl=120, show_spinner=False)
 def _indexes():
+    """All index names, sorted — the registry returns them in insertion order,
+    which makes any positional default arbitrary."""
     from services.hybrid_service import list_indexes
-    return [i.get("index_name", "") for i in list_indexes() if i.get("index_name")]
+    return sorted(
+        i.get("index_name", "") for i in list_indexes() if i.get("index_name")
+    )
 
 
 # ── Sidebar controls ──────────────────────────────────────────────────────────
@@ -49,84 +53,153 @@ def _indexes():
 with st.sidebar:
     render_sidebar_user()
     st.divider()
-    st.markdown("**Retrieval controls**")
+    st.markdown(
+        '<div class="lux-eyebrow" style="margin-bottom:8px;">Réglages</div>',
+        unsafe_allow_html=True,
+    )
 
     all_idx = _indexes()
-    picked = st.multiselect("Index(es)", all_idx, default=all_idx[:1] if all_idx else [])
-    top_k = st.slider("Top K (per view)", 3, 20, 8)
-    dense_w = st.slider("Dense weight", 0.0, 1.0, 0.7, 0.05)
+    # Every index by default. Searching a single arbitrary one made BM25 look
+    # broken: an exact reference lives in one index, so querying any other
+    # returns nothing — while dense always returns its k nearest, however far.
+    # That is the very comparison this page exists to show, so it must not be
+    # sabotaged by the default selection.
+    picked = st.multiselect("Domaines cherchés", all_idx, default=all_idx)
+    top_k = st.slider("Résultats par colonne", 3, 20, 8)
+    dense_w = st.slider("Poids du sens", 0.0, 1.0, 0.7, 0.05)
     sparse_w = round(1.0 - dense_w, 2)
-    st.caption(f"Sparse weight = {sparse_w}")
+    st.caption(f"Poids des mots exacts = {sparse_w}")
     dense_gated = st.toggle(
-        "Dense-gating", value=False,
-        help="ON: only chunks found by vector search survive the hybrid merge — "
-             "exact keyword hits the embedding missed are dropped.",
+        "Ne garder que le sens", value=False,
+        help="Activé : seuls les passages trouvés par la recherche de sens "
+             "sont retenus. Les correspondances de mots exacts que le sens a "
+             "manquées sont écartées.",
     )
-    dedup = st.toggle("Content dedup", value=True,
-                      help="Collapse identical passages duplicated across files.")
+    dedup = st.toggle("Fusionner les doublons", value=True,
+                      help="Regroupe les passages identiques présents dans "
+                           "plusieurs fichiers.")
     st.divider()
-    st.markdown("**Business metadata**")
+    st.markdown(
+        '<div class="lux-eyebrow" style="margin-bottom:8px;">Métadonnées métier</div>',
+        unsafe_allow_html=True,
+    )
     tag_raw = st.text_input(
-        "Filter by tags", placeholder="matiere:cuir, demande:reparation",
-        help="Comma-separated. Convention: matiere: / produit: / demande: / cible:. "
-             "A chunk must carry ALL listed tags.",
+        "Filtrer par étiquette", placeholder="matiere:cuir, demande:reparation",
+        help="Séparées par des virgules. Convention : matiere: / produit: / "
+             "demande: / cible:. Un passage doit porter TOUTES les étiquettes.",
     )
     tag_filter = [t.strip().lower() for t in tag_raw.split(",") if t.strip()]
 
 # ── Header ────────────────────────────────────────────────────────────────────
 
 st.markdown(
-    f'<div style="font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;'
-    f'color:#8f8b86;">Retrieval pipeline</div>'
-    f'<div style="width:44px;height:2px;background:{_ACCENT};margin:8px 0 18px 0;"></div>',
+    """
+    <div class="lux-eyebrow">Comparer les recherches</div>
+    <div class="lux-stitch"></div>
+    <div class="lux-h2" style="margin-bottom:12px;">Une question, trois façons de chercher</div>
+    <p class="lux-lead" style="font-size:.92rem;">
+      La même question est posée de trois manières : par le <b>sens</b>, par les
+      <b>mots exacts</b>, puis en <b>combinant les deux</b>. Comparez ce que
+      chacune remonte — c'est ce qui explique pourquoi l'assistant les associe.
+    </p>
+    """,
     unsafe_allow_html=True,
 )
 
-query = st.text_input("Question", placeholder="e.g. comment entretenir un sac en cuir Togo ?")
-go = st.button("Search", type="primary")
+query = st.text_input(
+    "Votre question",
+    placeholder="ex. comment entretenir un sac en cuir Togo ?",
+)
+go = st.button("Rechercher", type="primary")
 
 # ── Rendering helpers ─────────────────────────────────────────────────────────
 
+def _fmt_date(v) -> str:
+    """Best-effort short date from a DuckDB DATE / datetime / str."""
+    if not v:
+        return ""
+    s = str(v)
+    return s[:10]  # YYYY-MM-DD
+
+
 def _chunk_card(c: dict, *, tag: str = "") -> None:
     score = c.get("score", 0.0)
-    fname = c.get("file_name", "?")
+    fname = c.get("file_name") or "?"
     idx = c.get("_index", c.get("index_name", ""))
     dup = c.get("duplicate_count", 1)
     rd, rs = c.get("rank_dense", 0), c.get("rank_sparse", 0)
     body = (c.get("content", "") or "")[:280]
 
-    meta_bits = []
+    # retrieval-provenance line (rank / dedup / rescue tag)
+    prov = []
     if rd or rs:
-        meta_bits.append(f"dense#{rd or '—'} · sparse#{rs or '—'}")
+        prov.append(f"dense#{rd or '—'} · sparse#{rs or '—'}")
     if dup > 1:
-        meta_bits.append(f"×{dup} dupes merged")
+        prov.append(f"×{dup} dupes merged")
     if tag:
-        meta_bits.append(tag)
-    meta = "  |  ".join(meta_bits)
+        prov.append(tag)
+    prov_html = (
+        f'<div style="font-size:.66rem;color:{_ACCENT};letter-spacing:.03em;'
+        f'margin:2px 0 6px;">{"  ·  ".join(prov)}</div>' if prov else ""
+    )
 
+    # business/document metadata carried on the chunk (real columns from the DB)
+    ci, ct = c.get("chunk_index"), c.get("chunk_total")
+    edim = c.get("embedding_dim")
+    meta_pairs = [
+        ("domaine", c.get("domaine")),
+        ("type", c.get("file_type")),
+        ("langue", c.get("langue")),
+        ("auteur", c.get("author")),
+        ("chunk", f"{ci}/{ct}" if ci is not None and ct else None),
+        ("créé", _fmt_date(c.get("created_at"))),
+        ("modèle", c.get("embedding_model")
+         + (f" ({edim})" if edim else "") if c.get("embedding_model") else None),
+    ]
+    meta_rows = "".join(
+        f'<div style="display:flex;gap:6px;"><span style="color:#b3aea8;'
+        f'min-width:52px;">{k}</span><span style="color:#6a655f;">{v}</span></div>'
+        for k, v in meta_pairs if v
+    )
+    meta_html = (
+        f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:1px 12px;'
+        f'font-size:.66rem;margin:2px 0 6px;">{meta_rows}</div>' if meta_rows else ""
+    )
+
+    # source link (Drive / URL) when present
+    src = c.get("source_url") or ""
+    src_html = (
+        f'<a href="{src}" target="_blank" style="font-size:.64rem;color:{_ACCENT};'
+        f'text-decoration:none;">↗ source</a>' if src else ""
+    )
+
+    # tags — business facet tags (matiere:/demande:/…) get highlighted
     tags = c.get("tags") or []
     tags_html = ""
     if tags:
         chips = "".join(
-            f'<span style="background:{_ACCENT}14;color:{_ACCENT};font-size:.62rem;'
-            f'padding:1px 6px;border-radius:3px;margin-right:4px;">{t}</span>'
-            for t in tags[:6]
+            f'<span style="background:{_ACCENT}14;color:{_ACCENT};font-size:.6rem;'
+            f'padding:1px 6px;border-radius:3px;margin:0 4px 3px 0;'
+            f'display:inline-block;">{t}</span>'
+            for t in tags[:10]
         )
-        tags_html = f'<div style="margin:6px 0 2px;">{chips}</div>'
+        tags_html = f'<div style="margin:4px 0 2px;">{chips}</div>'
 
     st.markdown(
         f"""
         <div style="border:1px solid #e9e5e1;border-left:3px solid {_ACCENT};
                     padding:10px 12px;margin-bottom:8px;">
-          <div style="display:flex;justify-content:space-between;align-items:baseline;">
-            <span style="font-weight:600;font-size:.8rem;">{fname}</span>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">
+            <span style="font-weight:600;font-size:.8rem;word-break:break-word;">{fname}</span>
             <span style="font-family:monospace;color:{_ACCENT};font-size:.82rem;">
               {score:.3f}</span>
           </div>
-          <div style="font-size:.68rem;color:#9a958f;letter-spacing:.04em;margin:2px 0 6px;">
-            {idx}{('  ·  ' + meta) if meta else ''}</div>
+          <div style="font-size:.66rem;color:#9a958f;letter-spacing:.04em;margin:2px 0 4px;">
+            {idx} {src_html}</div>
+          {prov_html}
+          {meta_html}
           {tags_html}
-          <div style="font-size:.82rem;color:#55504b;line-height:1.5;">{body}…</div>
+          <div style="font-size:.8rem;color:#55504b;line-height:1.5;">{body}…</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -137,10 +210,10 @@ def _chunk_card(c: dict, *, tag: str = "") -> None:
 
 if go:
     if not query.strip():
-        st.warning("Enter a question.")
+        st.warning("Saisissez une question.")
         st.stop()
     if not picked:
-        st.warning("Pick at least one index.")
+        st.warning("Sélectionnez au moins un domaine.")
         st.stop()
 
     from hybrid.retrieval.dense import dense_search
@@ -150,7 +223,7 @@ if go:
 
     store, embedder = _engine()
 
-    with st.spinner("Retrieving…"):
+    with st.spinner("Recherche en cours…"):
         q_emb = embedder.embed_query(query)
         dense_all, sparse_all = [], []
         for idx in picked:
@@ -185,39 +258,57 @@ if go:
 
     c1, c2, c3 = st.columns(3, gap="medium")
     with c1:
-        st.markdown("##### Dense (vector)")
-        st.caption("Semantic similarity — paraphrase-friendly, misses exact tokens.")
+        st.markdown("##### Par le sens")
+        st.caption("Comprend la reformulation, mais peut rater un mot exact.")
         for c in dense_all[:top_k]:
             _chunk_card(c)
     with c2:
-        st.markdown("##### Sparse (BM25)")
-        st.caption("Exact keywords — references, serials, part names.")
+        st.markdown("##### Par les mots exacts")
+        st.caption("Références, numéros de série, noms de pièces — au mot près.")
+        if not sparse_all:
+            # An empty BM25 column is a result, not a failure — and it is one of
+            # the sharpest lessons this page can teach, so it gets explained
+            # rather than left as a blank column next to a full one.
+            st.info(
+                "**Aucun résultat — et c'est normal.**\n\n"
+                "Aucun passage des index sélectionnés ne contient ces termes. "
+                "BM25 ne retourne que ce qui contient littéralement les mots "
+                "cherchés : pas de terme, pas de résultat.\n\n"
+                "La colonne dense, elle, est pleine — elle retourne toujours ses "
+                "k plus proches voisins, **même très éloignés**. Une colonne "
+                "dense remplie ne veut donc pas dire qu'elle a trouvé quelque "
+                "chose de pertinent.\n\n"
+                "Élargissez la sélection d'index, ou essayez une référence "
+                "exacte présente au catalogue.",
+                icon="🔍",
+            )
         for c in sparse_all[:top_k]:
-            only = "sparse-only" if c.get("id") not in dense_ids else ""
+            only = "mots exacts seuls" if c.get("id") not in dense_ids else ""
             _chunk_card(c, tag=only)
     with c3:
-        st.markdown("##### Hybrid (RRF)")
-        gate = "gated" if dense_gated else "open"
-        st.caption(f"Rank fusion · {gate}{' · deduped' if dedup else ''}")
+        st.markdown("##### Les deux combinés")
+        gate = "sens seul" if dense_gated else "sens + mots"
+        st.caption(f"Fusion des classements · {gate}"
+                   f"{' · doublons fusionnés' if dedup else ''}")
         for c in hybrid[:top_k]:
             src = ""
             if c.get("id") in sparse_ids and c.get("id") not in dense_ids:
-                src = "rescued by BM25"
+                src = "rattrapé par les mots exacts"
             _chunk_card(c, tag=src)
 
-    # Teaching callout: what dense-gating cost / saved
+    # Teaching callout: what filtering on meaning alone costs / saves
     rescued = [c for c in hybrid[:top_k]
                if c.get("id") in sparse_ids and c.get("id") not in dense_ids]
     st.divider()
     if dense_gated:
         st.info(
-            "Dense-gating is **ON** — any exact-keyword chunk the vector search "
-            "missed was dropped. Toggle it off to see what BM25 would rescue.",
-            icon="🔒",
+            "**Seul le sens compte ici.** Les passages trouvés uniquement par "
+            "leurs mots exacts ont été écartés. Désactivez l'option à gauche "
+            "pour voir ce qu'ils apportaient.",
         )
     elif rescued:
         st.success(
-            f"Dense-gating **OFF** — {len(rescued)} chunk(s) here were found only "
-            "by BM25 and would vanish if gated. This is why exact-match hybrid matters.",
-            icon="🔓",
+            f"**{len(rescued)} passage(s) n'ont été trouvés que par leurs mots "
+            f"exacts.** Ils disparaîtraient si l'on ne se fiait qu'au sens — "
+            f"c'est précisément pour eux que les deux méthodes sont combinées.",
         )

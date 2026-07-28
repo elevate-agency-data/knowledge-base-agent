@@ -21,6 +21,22 @@ from shared.brand import ACTIVE as _BRAND
 _ACCENT = _BRAND.theme.accent
 _ACCENT_LIGHT = _BRAND.theme.accent_light
 
+# Parenthesised references to the machinery rather than to a document:
+# `(sav_analyze_image_response)`, `(hybrid_query)`, `(source: sav_analyze_image)`.
+#
+# Kept deliberately narrow: the content must be ONE snake_case identifier with
+# no spaces. That is what a tool name looks like and what French prose in
+# parentheses never looks like — "(environ 3 semaines)", "(hors garantie)" and
+# real citations "(garantie - Politique.docx)" all contain spaces and survive.
+# Filenames are spared too: a dot is not in the allowed character set.
+_TOOLISH_PAREN_RE = re.compile(
+    r"\s*\("
+    r"(?:(?:source|réf|ref)\s*:\s*)?"          # optional "source :" label
+    r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+"           # tool_name — one or more "_"
+    r"\)",
+    re.IGNORECASE,
+)
+
 
 # ── Source badge highlighting ────────────────────────────────────────────────
 
@@ -34,6 +50,15 @@ def _highlight_sources(text: str, sources: list[dict]) -> str:
     """
     if not text:
         return text
+
+    # Strip pseudo-citations pointing at the machinery. The model is told to
+    # cite documents `(INDEX - FileName)`, and it sometimes stretches that habit
+    # to whatever produced a fact — emitting `(sav_analyze_image_response)`.
+    # Those carry no ` - ` separator so they never become badges: they just sit
+    # in the prose as raw plumbing, in an answer the advisor reads to a client.
+    # The instruction forbids them, but an instruction is a tendency, not a
+    # guarantee, so they are removed here as well.
+    text = _TOOLISH_PAREN_RE.sub("", text)
 
     # Build lookup: file name → source_url
     source_map: dict[str, str] = {}

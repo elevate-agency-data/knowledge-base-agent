@@ -47,6 +47,19 @@ class Theme:
     text: str = "#1A1A1A"              # main text color
     base: str = "light"                # Streamlit base theme ("light" | "dark")
     font: str = "sans serif"           # Streamlit theme.font: sans serif|serif|monospace
+    # Typography. Streamlit ≥1.5x accepts a full CSS font stack here, not just
+    # the three generic keywords, so a brand can name real faces. Stacks are
+    # system-only on purpose: no webfont request, so the app keeps working
+    # offline and behind a locked-down network.
+    #   font_body    : running text
+    #   font_heading : titles (same family by default — differentiate by size
+    #                  and spacing rather than by loading a second face)
+    #   font_code    : marks, references, scores (the poinçon face)
+    #   base_font_size: root size in px; luxury editorial reads slightly larger
+    font_body: str = ""
+    font_heading: str = ""
+    font_code: str = ""
+    base_font_size: int = 0
 
 
 def streamlit_theme_env(theme: Theme) -> dict[str, str]:
@@ -114,6 +127,11 @@ class BrandProfile:
     roles: tuple[str, ...] = ()
     default_role: str = "agent"
     role_keywords: dict[str, tuple[str, ...] | None] = field(default_factory=dict)
+    #   role_audience : maps a business role to the chunk-level ``audience_role``
+    #     values it may see (None = full access). This is the atelier RBAC —
+    #     finer than role_keywords (which gates whole indexes by name). When a
+    #     role is absent here, the code falls back to role_keywords.
+    role_audience: dict[str, tuple[str, ...] | None] = field(default_factory=dict)
 
     # 5. Branding assets & copy
     #   logo_path : project-relative path to the brand logo (png/svg). Empty →
@@ -136,6 +154,33 @@ class BrandProfile:
     demo_chunks: tuple[tuple[str, str], ...] = ()
     demo_query: str = ""
     demo_tags: tuple[tuple[str, ...], ...] = ()
+    #    demo_indexes drive the "vector store" chapter: one entry per business
+    #    index/collection as (display_name, illustrative_vector_count). They show
+    #    that a store is partitioned into domain indexes, not one flat blob.
+    demo_indexes: tuple[tuple[str, int], ...] = ()
+    #    demo_query_indexes: which demo_indexes entries the demo_query is routed
+    #    to (0-based). The search chapter lights these up and dims the rest, to
+    #    show that a query hits only the relevant domain indexes.
+    demo_query_indexes: tuple[int, ...] = (0, 1)
+
+    # 7. SAV image analysis (vision tools) — the brand's own vocabulary, fed to
+    #    the vision model so it names things the way the Maison does instead of
+    #    inventing generic labels. Leave empty to disable the vision tools for
+    #    a brand: the tool then reports that this profile has no SAV taxonomy.
+    #      vision_product_lines : the product families the model must choose from
+    #      vision_materials     : named materials it should recognise
+    #      vision_damage_types  : the damage vocabulary used by the workshop
+    #      vision_components    : detachable/replaceable parts — drives the
+    #                             "what can be salvaged / reused" assessment
+    vision_product_lines: tuple[str, ...] = ()
+    vision_materials: tuple[str, ...] = ()
+    vision_damage_types: tuple[str, ...] = ()
+    vision_components: tuple[str, ...] = ()
+
+    @property
+    def has_vision(self) -> bool:
+        """True when this brand defines an SAV image-analysis taxonomy."""
+        return bool(self.vision_product_lines or self.vision_damage_types)
 
     @property
     def agent_name(self) -> str:
@@ -153,13 +198,16 @@ class BrandProfile:
 _HERMES = BrandProfile(
     name="Hermes",
     domain="luxury after-sales & client care (SAV)",
-    subtitle="After-sales & client care knowledge base",
+    # ── User-facing copy (French: the app is used in French) ───────────────
+    # The prompt fragments further down stay in English — they instruct the
+    # model, which is separately told to answer in the user's own language.
+    subtitle="Base de connaissance du service après-vente",
     description=(
-        "Hermes indexes the Maison's after-sales & client care knowledge base "
-        "— repair & restoration, lifetime care of leather, silk and precious "
-        "metals, warranty, authenticity, personalization, orders and client "
-        "requests — and lets client advisors and workshop artisans find "
-        "refined, sourced answers."
+        "Tout ce que la Maison sait de l'après-vente, réuni au même endroit : "
+        "réparation et restauration, entretien du cuir, de la soie et des "
+        "métaux, garantie, authenticité, personnalisation, commandes et "
+        "retours. Posez votre question comme vous la poseriez à un collègue — "
+        "la réponse arrive avec les documents dont elle vient."
     ),
     drive_root_folder="Rag_hermes",
     duckdb_path="hybrid/data/hermes_hybrid.duckdb",
@@ -171,6 +219,15 @@ _HERMES = BrandProfile(
         tool="#FDEEE1",
         error="#F8D7DA",
         font="serif",           # classic serif — luxury register
+        # Humanist old-style serif: warmer and less newspapery than Georgia,
+        # and present on both macOS (Iowan) and Windows (Palatino Linotype).
+        font_body=('"Iowan Old Style", "Palatino Linotype", Palatino, '
+                   '"Book Antiqua", Georgia, serif'),
+        font_heading=('"Iowan Old Style", "Palatino Linotype", Palatino, '
+                      '"Book Antiqua", Georgia, serif'),
+        font_code=('ui-monospace, "SF Mono", "JetBrains Mono", '
+                   '"IBM Plex Mono", Consolas, monospace'),
+        base_font_size=17,
     ),
     audience=(
         "client advisors, after-sales specialists, boutique staff and "
@@ -250,8 +307,14 @@ _HERMES = BrandProfile(
             "soin", "personnalisation",
         ),
     },
+    role_audience={
+        # user role -> chunk audience_role values it may see (None = full)
+        "responsable_sav": None,                       # sees everything
+        "conseiller_client": ("conseiller", "expert_authentification"),
+        "artisan": ("artisan",),
+    },
     logo_path="ui/assets/hermes_logo.png",   # drop the official asset here
-    headline="The Maison's savoir-faire, instantly at hand.",
+    headline="Le savoir-faire de la Maison, à portée de question.",
     demo_doc_title="Guide d'entretien — Maroquinerie",
     demo_doc_text=(
         "Guide d'entretien — Maroquinerie\n\n"
@@ -283,6 +346,49 @@ _HERMES = BrandProfile(
         ("matiere:cuir", "demande:tache"),
         ("produit:fermoir", "matiere:metal"),
         ("demande:garantie", "cible:conseiller"),
+    ),
+    demo_indexes=(
+        ("Réparation & restauration", 1280),
+        ("Entretien & soin", 940),
+        ("Garantie", 610),
+        ("Authenticité", 430),
+        ("Personnalisation", 380),
+        ("Produits & savoir-faire", 1120),
+    ),
+    demo_query_indexes=(0, 1),   # entretenir le cuir -> Réparation + Entretien
+    vision_product_lines=(
+        "maroquinerie (sac, pochette, portefeuille, ceinture)",
+        "soie & textile (carré, twilly, écharpe, cravate)",
+        "horlogerie (montre, bracelet de montre)",
+        "bijouterie (bracelet, bague, collier, boucles d'oreilles)",
+        "art de vivre (porcelaine, cristal, plateau, objet de bureau)",
+        "souliers",
+    ),
+    vision_materials=(
+        "cuir Togo", "cuir Clémence", "cuir Epsom", "cuir Swift",
+        "cuir Barénia", "box-calf", "chèvre Mysore", "cuir exotique",
+        "twill de soie", "cachemire",
+        "métal plaqué or", "métal palladié", "or", "argent",
+        "porcelaine", "cristal", "bois",
+    ),
+    vision_damage_types=(
+        "rayure", "éraflure", "usure des angles", "usure des arêtes",
+        "couture lâchée ou rompue", "déchirure", "perforation",
+        "tache", "auréole", "décoloration", "teinte passée",
+        "déformation", "affaissement de structure", "cuir sec ou craquelé",
+        "oxydation du métal", "plaquage usé", "pièce manquante",
+        "mécanisme grippé ou cassé", "accroc", "roulotté défait",
+        "verre rayé ou fêlé", "éclat", "fêlure",
+    ),
+    vision_components=(
+        "fermoir", "boucle", "cadenas", "clochette", "clés",
+        "sangle", "bandoulière", "poignée", "anse",
+        "zip / fermeture éclair", "mousqueton", "pieds de sac",
+        "doublure", "garniture intérieure", "poche intérieure",
+        "boucle ardillon", "passant", "rivet", "œillet",
+        "bracelet de montre", "boîtier", "mouvement", "verre", "couronne",
+        "chaîne", "maillon", "pierre / cabochon",
+        "semelle", "talon", "lacets",
     ),
 )
 
@@ -404,6 +510,15 @@ _INDICA = BrandProfile(
         ("domaine:finance", "demande:recouvrement"),
         ("domaine:deliberation", "cible:adjoint"),
     ),
+    demo_indexes=(
+        ("Finances & comptabilité", 1450),
+        ("Ressources humaines", 980),
+        ("Patrimoine & énergie", 640),
+        ("Pilotage & suivi", 520),
+        ("Métier & services", 1130),
+        ("Divers & rapports", 410),
+    ),
+    demo_query_indexes=(0, 4),   # tarif cantine -> Finances + Métier & services
 )
 
 
@@ -501,6 +616,14 @@ _CC_DEMO_TAGS = (
     ("demande:frais", "cible:conseiller"),
     ("demande:remboursement", "cible:superviseur"),
 )
+_CC_DEMO_INDEXES = (
+    ("Retours & remboursements", 1040),
+    ("Commandes", 1310),
+    ("Livraison", 720),
+    ("Produits & tailles", 1180),
+    ("Fidélité & compte", 560),
+    ("Réclamations", 480),
+)
 
 
 # ── Profile: Lacoste (customer care — client instance) ─────────────────────────
@@ -537,6 +660,7 @@ _LACOSTE = BrandProfile(
     demo_chunks=_CC_DEMO_CHUNKS,
     demo_query=_CC_DEMO_QUERY,
     demo_tags=_CC_DEMO_TAGS,
+    demo_indexes=_CC_DEMO_INDEXES,
     roles=_CC_ROLES,
     default_role=_CC_DEFAULT_ROLE,
     role_keywords=_CC_ROLE_KEYWORDS,
@@ -581,6 +705,7 @@ _ACTIVATE = BrandProfile(
     demo_chunks=_CC_DEMO_CHUNKS,
     demo_query=_CC_DEMO_QUERY,
     demo_tags=_CC_DEMO_TAGS,
+    demo_indexes=_CC_DEMO_INDEXES,
 )
 
 

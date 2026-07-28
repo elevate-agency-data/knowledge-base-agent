@@ -37,7 +37,13 @@ ALLOYDB_CONNECTION_STRING: str = ""  # e.g. "postgresql://user:pass@host:5432/db
 # ---------------------------------------------------------------------------
 # Chunking
 # ---------------------------------------------------------------------------
-CHUNK_SIZE: int = 0          # 0 = auto from model max_seq_length (e5-base-768: 512 tokens)
+# Chunk size in tokens. 0 = auto = the model's max_seq_length (510 for
+# e5-base-768), which is the CEILING, not the sweet spot: a full 510-token chunk
+# compresses ~380 words into one 768-d vector, so a pointed question retrieves a
+# block that is mostly off-topic. 320 keeps chunks focused while staying well
+# clear of truncation. Measured on the hermes corpus: 510 -> 186 chunks
+# (~2.5/doc), 320 -> 285 chunks (~3.9/doc) for the same 73 documents.
+CHUNK_SIZE: int = 320
 CHUNK_OVERLAP: int = 32     # in tokens
 SEMANTIC_BREAKPOINT_THRESHOLD: float = 0.85
 PARENT_CHUNK_SIZE: int = 1024

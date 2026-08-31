@@ -16,6 +16,7 @@ Performance tiers (dense search, in order):
 import logging
 import os
 import re
+import threading
 from typing import Optional
 
 import numpy as np
@@ -109,21 +110,43 @@ class DuckDBStore(BaseStore):
         self.db_path = db_path
         self._conn = None
         self._vss_available = False
+        # One base connection per process, but a SEPARATE cursor per thread.
+        #
+        # A DuckDBPyConnection carries the pending result of the last execute():
+        # `conn.execute(sql).fetchall()` is two steps over shared state. With
+        # several users served concurrently (Streamlit runs one thread per
+        # session, and the agent spawns another per request), one thread's
+        # execute() overwrites another's pending result, which then fetches
+        # None. Measured on this store: 2 of 3 concurrent readers failed with
+        # "'NoneType' object is not subscriptable", and the error was swallowed
+        # by the retrieval fallbacks — users saw silently empty answers.
+        #
+        # cursor() opens a lightweight connection onto the same database, so
+        # each thread gets its own result slot. Extensions and registered
+        # indexes are inherited from the parent connection.
+        self._open_lock = threading.Lock()   # guards base-connection creation
+        self._write_lock = threading.RLock()  # serialises DDL / inserts
+        self._local = threading.local()
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get_conn(self):
-        """Lazily create the DuckDB connection and load extensions."""
-        if self._conn is None:
+    def _base_conn(self):
+        """Create (once) the process-wide connection with its extensions."""
+        if self._conn is not None:
+            return self._conn
+        with self._open_lock:
+            if self._conn is not None:      # another thread won the race
+                return self._conn
             import duckdb
 
             os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-            self._conn = duckdb.connect(
+            conn = duckdb.connect(
                 self.db_path,
                 config={"hnsw_enable_experimental_persistence": True},
             )
+            self._conn = conn
             # FTS extension
             try:
                 self._conn.execute("LOAD fts")
@@ -148,6 +171,19 @@ class DuckDBStore(BaseStore):
             self._conn.execute(_CREATE_INDEXES_TABLE_SQL)
         return self._conn
 
+    def _get_conn(self):
+        """Return this thread's cursor onto the shared database.
+
+        Every caller keeps using ``_get_conn()`` exactly as before; the only
+        difference is that two threads no longer share one result slot.
+        """
+        base = self._base_conn()
+        cur = getattr(self._local, "cur", None)
+        if cur is None:
+            cur = base.cursor()
+            self._local.cur = cur
+        return cur
+
     def _tbl(self, index_name: str) -> str:
         """Return the SQL table name for this index."""
         return f"chunks_{_sanitize(index_name)}"
@@ -160,7 +196,7 @@ class DuckDBStore(BaseStore):
         """Rebuild the FTS index for this index's table (non-fatal)."""
         table = self._tbl(index_name)
         try:
-            self._conn.execute(
+            self._get_conn().execute(
                 f"PRAGMA create_fts_index('{table}', 'id', 'content', overwrite=1)"
             )
         except Exception:
@@ -173,17 +209,17 @@ class DuckDBStore(BaseStore):
         table = self._tbl(index_name)
         idx = self._hnsw_idx(index_name)
         try:
-            exists = self._conn.execute(
+            exists = self._get_conn().execute(
                 f"SELECT COUNT(*) FROM duckdb_indexes() WHERE index_name='{idx}'"
             ).fetchone()[0]
             if exists:
                 return
-            count = self._conn.execute(
+            count = self._get_conn().execute(
                 f"SELECT COUNT(*) FROM {table} WHERE embedding IS NOT NULL"
             ).fetchone()[0]
             if count == 0:
                 return
-            self._conn.execute(
+            self._get_conn().execute(
                 f"CREATE INDEX {idx} ON {table} USING HNSW (embedding) WITH (metric='cosine')"
             )
         except Exception:
@@ -201,13 +237,13 @@ class DuckDBStore(BaseStore):
         table = self._tbl(index_name)
         idx = self._hnsw_idx(index_name)
         try:
-            count = self._conn.execute(
+            count = self._get_conn().execute(
                 f"SELECT COUNT(*) FROM {table} WHERE embedding IS NOT NULL"
             ).fetchone()[0]
             if count == 0:
                 return
-            self._conn.execute(f"DROP INDEX IF EXISTS {idx}")
-            self._conn.execute(
+            self._get_conn().execute(f"DROP INDEX IF EXISTS {idx}")
+            self._get_conn().execute(
                 f"CREATE INDEX {idx} ON {table} USING HNSW (embedding) WITH (metric='cosine')"
             )
         except Exception:
@@ -256,13 +292,14 @@ class DuckDBStore(BaseStore):
         """
         conn = self._get_conn()
         table = self._tbl(index_name)
-        conn.execute(_CHUNK_TABLE_SQL.format(table=table, dim=EMBEDDING_DIM))
-        conn.execute(
-            "INSERT OR IGNORE INTO hybrid_indexes (index_name, embedding_model, chunk_strategy) VALUES (?, ?, ?)",
-            [index_name, embedding_model, chunk_strategy],
-        )
-        self._rebuild_fts(index_name)
-        self._rebuild_hnsw(index_name)
+        with self._write_lock:
+            conn.execute(_CHUNK_TABLE_SQL.format(table=table, dim=EMBEDDING_DIM))
+            conn.execute(
+                "INSERT OR IGNORE INTO hybrid_indexes (index_name, embedding_model, chunk_strategy) VALUES (?, ?, ?)",
+                [index_name, embedding_model, chunk_strategy],
+            )
+            self._rebuild_fts(index_name)
+            self._rebuild_hnsw(index_name)
 
     def insert_chunks(self, chunks: list[dict]) -> None:
         """
@@ -279,36 +316,39 @@ class DuckDBStore(BaseStore):
 
         for index_name, index_chunks in by_index.items():
             table = self._tbl(index_name)
-            self._ensure_atelier_columns(table)   # migrate old tables in place
-            sql = _INSERT_SQL.format(table=table)
-            for chunk in index_chunks:
-                conn.execute(sql, [
-                    chunk["id"],
-                    chunk["index_name"],
-                    chunk["content"],
-                    chunk.get("embedding"),
-                    chunk.get("source_url", ""),
-                    chunk.get("file_name", ""),
-                    chunk.get("file_type", ""),
-                    chunk.get("created_at"),
-                    chunk.get("updated_at"),
-                    chunk.get("author", ""),
-                    chunk.get("domaine", ""),
-                    chunk.get("langue", ""),
-                    chunk.get("tags", []),
-                    chunk.get("ligne_produit", ""),
-                    chunk.get("zone", ""),
-                    chunk.get("audience_role", []),
-                    chunk.get("matiere", []),
-                    chunk.get("chunk_index", 0),
-                    chunk.get("chunk_total", 1),
-                    chunk.get("chunk_strategy", "fixed"),
-                    chunk.get("parent_chunk_id"),
-                    chunk.get("embedding_model", ""),
-                    chunk.get("embedding_dim", 0),
-                ])
-            self._rebuild_fts(index_name)
-            self._rebuild_hnsw(index_name)
+            # One writer at a time: an insert or an index rebuild running while
+            # another thread reads would race on the same tables.
+            with self._write_lock:
+                self._ensure_atelier_columns(table)   # migrate old tables in place
+                sql = _INSERT_SQL.format(table=table)
+                for chunk in index_chunks:
+                    conn.execute(sql, [
+                        chunk["id"],
+                        chunk["index_name"],
+                        chunk["content"],
+                        chunk.get("embedding"),
+                        chunk.get("source_url", ""),
+                        chunk.get("file_name", ""),
+                        chunk.get("file_type", ""),
+                        chunk.get("created_at"),
+                        chunk.get("updated_at"),
+                        chunk.get("author", ""),
+                        chunk.get("domaine", ""),
+                        chunk.get("langue", ""),
+                        chunk.get("tags", []),
+                        chunk.get("ligne_produit", ""),
+                        chunk.get("zone", ""),
+                        chunk.get("audience_role", []),
+                        chunk.get("matiere", []),
+                        chunk.get("chunk_index", 0),
+                        chunk.get("chunk_total", 1),
+                        chunk.get("chunk_strategy", "fixed"),
+                        chunk.get("parent_chunk_id"),
+                        chunk.get("embedding_model", ""),
+                        chunk.get("embedding_dim", 0),
+                    ])
+                self._rebuild_fts(index_name)
+                self._rebuild_hnsw(index_name)
 
     def _ensure_atelier_columns(self, table: str) -> None:
         """Add the atelier metadata columns to *table* if missing (idempotent).
@@ -482,16 +522,18 @@ class DuckDBStore(BaseStore):
         """Delete all chunks for a file within one index, then rebuild indexes."""
         conn = self._get_conn()
         table = self._tbl(index_name)
-        conn.execute(f"DELETE FROM {table} WHERE file_name = ?", [file_name])
-        self._rebuild_fts(index_name)
-        self._rebuild_hnsw(index_name)
+        with self._write_lock:
+            conn.execute(f"DELETE FROM {table} WHERE file_name = ?", [file_name])
+            self._rebuild_fts(index_name)
+            self._rebuild_hnsw(index_name)
 
     def delete_index(self, index_name: str) -> None:
         """Drop the index table entirely and remove from registry."""
         conn = self._get_conn()
         table = self._tbl(index_name)
-        conn.execute(f"DROP TABLE IF EXISTS {table}")
-        conn.execute("DELETE FROM hybrid_indexes WHERE index_name = ?", [index_name])
+        with self._write_lock:
+            conn.execute(f"DROP TABLE IF EXISTS {table}")
+            conn.execute("DELETE FROM hybrid_indexes WHERE index_name = ?", [index_name])
 
     def list_indexes(self) -> list[str]:
         """Return all registered index names from the registry table."""
